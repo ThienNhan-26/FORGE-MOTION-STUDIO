@@ -1,0 +1,1 @@
+Implementation details for 3D Specialist Agent using OLLAMA_3D_MODEL.

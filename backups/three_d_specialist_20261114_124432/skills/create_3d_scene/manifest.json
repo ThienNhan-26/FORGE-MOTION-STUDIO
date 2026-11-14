@@ -1,0 +1,9 @@
+{
+  "name": "create_3d_scene",
+  "version": "1.0.0",
+  "description": "Validate and save a declarative 3D world SceneSpec for FORGE Motion Studio and Remotion. Uses only supported primitives; does not claim to create external meshes or textures.",
+  "input_schema": {
+    "scene": "object (Scene3DSpec v1: project_id, title, style, duration_seconds, environment, camera, objects[])"
+  },
+  "permissions": ["workspace:write"]
+}

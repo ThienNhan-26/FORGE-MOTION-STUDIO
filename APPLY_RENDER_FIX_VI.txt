@@ -1,0 +1,31 @@
+FORGE MOTION STUDIO - REMOTION R3F SINGLETON FIX
+=================================================
+
+Nguyên nhân:
+Motion Studio và Remotion adapter là hai npm project riêng.
+SceneWorld.tsx được dùng chung nhưng các package React / React Three Fiber /
+Three có thể được resolve từ hai node_modules khác nhau. Điều này làm
+ThreeCanvas tạo Canvas context từ một bản @react-three/fiber, trong khi
+SceneWorld / drei dùng bản khác. Kết quả là lỗi:
+  R3F: Hooks can only be used within the Canvas component!
+
+Bản sửa:
+remotion.config.ts ép Rspack dùng duy nhất các package từ:
+  adapters/remotion_template/node_modules
+
+Áp dụng:
+1. Dừng FORGE Motion Studio và mọi tiến trình Remotion đang chạy.
+2. Giải nén ZIP này vào thư mục gốc FORGE_MOTION_STUDIO_G1 (chọn Replace).
+3. Mở PowerShell tại thư mục gốc và chạy:
+
+   cd .\adapters\remotion_template
+   npm install
+   npm ls react react-dom three @react-three/fiber @react-three/drei @remotion/three
+   cd ..\.. 
+   .\scripts\motion-studio.ps1
+
+4. Thử Render MP4 lại.
+
+Không xóa node_modules. Không cần cài lại toàn bộ FORGE.
+Cảnh báo THREE.Clock deprecated là cảnh báo phụ; không phải lỗi làm render
+dừng. Lỗi chặn chính là R3F Canvas context bị tách do package trùng.

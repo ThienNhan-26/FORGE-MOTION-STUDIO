@@ -1,0 +1,25 @@
+{
+  "name": "inspect_files",
+  "version": "1.0.0",
+  "description": "Safely inspect files and directories inside FORGE workspace without executing or modifying anything.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["read", "list", "metadata"]
+      },
+      "path": {
+        "type": "string",
+        "description": "Relative workspace path for single action."
+      },
+      "paths": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Optional list of relative paths for batch operations."
+      }
+    },
+    "required": ["action"]
+  },
+  "permissions": ["workspace_read"]
+}

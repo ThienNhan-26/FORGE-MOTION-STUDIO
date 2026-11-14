@@ -1,0 +1,7 @@
+json
+{
+  "spec_filename": "scene2.json",
+  "task_id": "t2",
+  "background_color": "blue",
+  "particles": "dust"
+}

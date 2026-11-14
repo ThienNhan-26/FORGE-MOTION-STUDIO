@@ -1,0 +1,7 @@
+{
+  "name": "render_3d_scene",
+  "version": "1.0.0",
+  "description": "Render a previously saved FORGE Motion Studio SceneSpec to a deterministic MP4 using Remotion and @remotion/three. Requires npm dependencies to be installed.",
+  "input_schema": { "project_id": "string: existing workspace/projects/<project_id>/scene.json" },
+  "permissions": ["workspace:read", "workspace:write", "process:remotion-render"]
+}

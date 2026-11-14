@@ -1,0 +1,1878 @@
+﻿FORGE COORDINATOR AND SCHEDULER DISCOVERY
+=========================================
+
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\agents\coder.py
+from __future__ import annotations
+from core.ollama import OllamaClient
+from config import OLLAMA_CODER_MODEL
+
+
+class CoderAgent:
+    def __init__(self, client: OllamaClient | None = None):
+        self.llm = client or OllamaClient(model=OLLAMA_CODER_MODEL)
+
+    def generate_code(self, prompt: str, previous_code: str = "", error: str = "") -> str:
+        system = (
+            "Báº¡n lÃ  ká»¹ sÆ° Python. Chá»‰ tráº£ vá» mÃ£ Python thuáº§n, khÃ´ng markdown. "
+            "Táº¡o chÆ°Æ¡ng trÃ¬nh rÃµ rÃ ng, cÃ³ kiá»ƒm tra lá»—i, khÃ´ng gá»i shell/subprocess, "
+            "khÃ´ng truy cáº­p máº¡ng, khÃ´ng Ä‘á»c/ghi ngoÃ i thÆ° má»¥c lÃ m viá»‡c cá»§a dá»± Ã¡n."
+        )
+        user = f"YÃŠU Cáº¦U:\n{prompt}"
+        if previous_code:
+            user += f"\n\nMÃƒ CÅ¨ Cáº¦N Sá»¬A:\n{previous_code}"
+        if error:
+            user += f"\n\nLá»–I KHI CHáº Y:\n{error}\nHÃ£y sá»­a nguyÃªn nhÃ¢n, khÃ´ng chá»‰ che lá»—i."
+        content = self.llm.chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0.1,
+        )
+        content = content.strip()
+        if content.startswith("```"):
+            lines = content.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "````":
+                lines = lines[:-1]
+            elif lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            content = "\n".join(lines).strip()
+        if not content:
+            raise RuntimeError("Coder tráº£ vá» mÃ£ nguá»“n rá»—ng.")
+        return content
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\agents\planner.py
+
+from __future__ import annotations
+
+import json
+import re
+import uuid
+from typing import Any
+
+from core.ollama import OllamaClient
+from core.skill_registry import SkillRegistry
+from config import OLLAMA_MODEL
+
+
+class PlannerError(RuntimeError):
+    pass
+
+
+class PlannerAgent:
+    def __init__(self, client: OllamaClient | None = None):
+        # Director / Planner: Gemma 4 E4B
+        self.llm = client or OllamaClient(model=OLLAMA_MODEL)
+
+    @staticmethod
+    def _extract_json(content: str) -> Any:
+        text = content.strip()
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+        text = re.sub(r"\s*```$", "", text)
+
+        start_candidates = [
+            i for i in (text.find("["), text.find("{"))
+            if i >= 0
+        ]
+
+        if start_candidates:
+            text = text[min(start_candidates):]
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise PlannerError(
+                f"Planner tráº£ vá» JSON lá»—i: {exc}. "
+                f"Pháº§n Ä‘áº§u pháº£n há»“i: {content[:500]}"
+            ) from exc
+
+    def create_task_graph(self, user_request: str) -> list[dict[str, Any]]:
+        manifests = SkillRegistry.get_manifests()
+
+        if not manifests:
+            raise PlannerError(
+                "KhÃ´ng cÃ³ skill nÃ o Ä‘Æ°á»£c náº¡p. "
+                "Kiá»ƒm tra thÆ° má»¥c skills/."
+            )
+
+        system = (
+            "Báº¡n lÃ  Planner cá»§a FORGE, má»™t há»‡ thá»‘ng agent cháº¡y local. "
+            "Chá»‰ láº­p káº¿ hoáº¡ch báº±ng cÃ¡c skill cÃ³ trong danh sÃ¡ch Ä‘Æ°á»£c cung cáº¥p. "
+            "KhÃ´ng giáº£ vá» cÃ³ cÃ´ng cá»¥ khÃ´ng tá»“n táº¡i. "
+            "Äáº§u ra pháº£i lÃ  JSON há»£p lá»‡."
+        )
+
+        user = f"""NHIá»†M Vá»¤ NGÆ¯á»œI DÃ™NG:
+{user_request}
+
+SKILLS ÄANG CÃ“:
+{json.dumps(manifests, ensure_ascii=False, indent=2)}
+
+HÃ£y láº­p DAG gá»“m cÃ¡c task nhá», Ä‘á»™c láº­p khi cÃ³ thá»ƒ. Tráº£ vá» duy nháº¥t JSON theo cáº¥u trÃºc:
+{{
+  "tasks": [
+    {{
+      "task_id": "t1",
+      "title": "TiÃªu Ä‘á» ngáº¯n",
+      "task_type": "PYTHON|VIDEO|GENERAL",
+      "skill_name": "tÃªn skill Ä‘Ãºng chÃ­nh táº£",
+      "description": "má»¥c Ä‘Ã­ch vÃ  yÃªu cáº§u Ä‘áº§y Ä‘á»§",
+      "input_data": {{}},
+      "dependencies": []
+    }}
+  ]
+}}
+
+Quy táº¯c:
+- skill_name báº¯t buá»™c pháº£i cÃ³ trong danh sÃ¡ch skill hiá»‡n cÃ³.
+- python_task: input_data gá»“m prompt (yÃªu cáº§u viáº¿t/cháº¡y chÆ°Æ¡ng trÃ¬nh) vÃ  filename (tÃªn .py tÆ°Æ¡ng Ä‘á»‘i trong workspace).
+- write_file: input_data gá»“m filename vÃ  content; khÃ´ng ghi Ä‘Ã¨ file Ä‘Ã£ cÃ³.
+- render_video: input_data gá»“m spec lÃ  VideoSpec vá»›i project_id, title, scenes; má»—i scene cÃ³ duration_seconds, bg_color1, bg_color2, camera_motion, layers; camera_motion CHá»ˆ Ä‘Æ°á»£c dÃ¹ng má»™t trong: none, zoom_in, zoom_out, pan_left, pan_right; layers hiá»‡n há»— trá»£ type=text hoáº·c particles. Má»—i layer pháº£i cÃ³ color lÃ  chuá»—i mÃ u hex; content luÃ´n pháº£i lÃ  chuá»—i, khÃ´ng bao giá» dÃ¹ng null. Vá»›i layer particles, dÃ¹ng content lÃ  chuá»—i rá»—ng ''. Vá»›i layer text, content pháº£i chá»©a ná»™i dung chá»¯.
+- create_3d_scene: input_data.scene pháº£i lÃ  má»™t object Scene3DSpec v1 hoÃ n chá»‰nh Ä‘á»ƒ táº¡o tháº¿ giá»›i 3D trong Motion Studio. CÃ¡c trÆ°á»ng cáº¥p cao: project_id, title, style (hiá»‡n chá»‰ há»— trá»£ low_poly), width, height, fps, duration_seconds, environment, camera, objects. Camera gá»“m position, end_position, target, end_target (má»—i giÃ¡ trá»‹ lÃ  máº£ng 3 sá»‘), fov vÃ  motion (none|push_in|orbit). Má»—i object gá»“m id duy nháº¥t an toÃ n, name, kind (island|tree|pine|house|cloud|rock|crystal|cube|sphere), position/rotation/scale (máº£ng 3 sá»‘), color #RRGGBB, visible vÃ  animation (none|float|rotate|pulse). Giá»›i háº¡n tá»‘i Ä‘a 250 objects.
+- render_3d_scene: input_data.project_id lÃ  project_id cá»§a scene Ä‘Ã£ táº¡o báº±ng create_3d_scene; cáº§n cÃ³ file workspace/projects/<project_id>/scene.json vÃ  dependencies Remotion Ä‘Ã£ Ä‘Æ°á»£c cÃ i. Khi ngÆ°á»i dÃ¹ng yÃªu cáº§u táº¡o vÃ  xuáº¥t video 3D, táº¡o task create_3d_scene trÆ°á»›c rá»“i render_3d_scene phá»¥ thuá»™c vÃ o task Ä‘Ã³.
+- KhÃ´ng táº¡o task cho thao tÃ¡c khÃ´ng cÃ³ skill há»— trá»£. Náº¿u nhiá»‡m vá»¥ cÃ³ nhiá»u pháº§n, tÃ¡ch thÃ nh task vÃ  khai bÃ¡o dependencies báº±ng task_id.
+- KhÃ´ng dÃ¹ng shell, khÃ´ng yÃªu cáº§u cÃ i package, khÃ´ng tuyÃªn bá»‘ Ä‘Ã£ thá»±c thi.
+- Äáº£m báº£o má»i dependency trá» tá»›i má»™t task_id cÃ³ trong danh sÃ¡ch; khÃ´ng táº¡o chu trÃ¬nh.
+"""
+
+        content = self.llm.chat(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.1,
+            json_mode=True,
+        )
+
+        parsed = self._extract_json(content)
+        tasks = parsed.get("tasks") if isinstance(parsed, dict) else parsed
+
+        if not isinstance(tasks, list) or not tasks:
+            raise PlannerError(
+                "Planner khÃ´ng táº¡o task nÃ o. "
+                "HÃ£y diá»…n Ä‘áº¡t nhiá»‡m vá»¥ cá»¥ thá»ƒ hÆ¡n."
+            )
+
+        allowed = {m["name"] for m in manifests}
+        normalized: list[dict[str, Any]] = []
+        used_ids: set[str] = set()
+
+        for index, item in enumerate(tasks, 1):
+            if not isinstance(item, dict):
+                raise PlannerError(
+                    f"Task thá»© {index} khÃ´ng pháº£i object JSON."
+                )
+
+            task_id = str(item.get("task_id") or f"t{index}").strip()
+
+            if not task_id or task_id in used_ids:
+                task_id = f"t{index}_{uuid.uuid4().hex[:4]}"
+
+            used_ids.add(task_id)
+
+            skill_name = str(item.get("skill_name", "")).strip()
+
+            if skill_name not in allowed:
+                raise PlannerError(
+                    f"Planner chá»n skill '{skill_name}' "
+                    f"khÃ´ng cÃ³ trong registry. "
+                    f"Skills há»£p lá»‡: {', '.join(sorted(allowed))}"
+                )
+
+            input_data = item.get("input_data", {})
+
+            if not isinstance(input_data, dict):
+                raise PlannerError(
+                    f"input_data cá»§a task {task_id} pháº£i lÃ  object JSON."
+                )
+
+            normalized.append({
+                "task_id": task_id,
+                "title": str(
+                    item.get("title") or f"Task {index}"
+                )[:180],
+                "task_type": str(
+                    item.get("task_type") or "GENERAL"
+                ).upper(),
+                "skill_name": skill_name,
+                "description": str(item.get("description") or ""),
+                "input_data": input_data,
+                "dependencies": [
+                    str(x)
+                    for x in item.get("dependencies", [])
+                    if isinstance(x, (str, int))
+                ],
+            })
+
+        valid_ids = {item["task_id"] for item in normalized}
+
+        for item in normalized:
+            unknown = set(item["dependencies"]) - valid_ids
+
+            if unknown:
+                raise PlannerError(
+                    f"Task {item['task_id']} tham chiáº¿u dependency "
+                    f"khÃ´ng tá»“n táº¡i: {', '.join(sorted(unknown))}"
+                )
+
+            if item["task_id"] in item["dependencies"]:
+                raise PlannerError(
+                    f"Task {item['task_id']} phá»¥ thuá»™c chÃ­nh nÃ³."
+                )
+
+        return normalized
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\control\command_center.py
+from __future__ import annotations
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Header, Footer, TextArea, RichLog, Static, DataTable
+from rich.text import Text
+from core.coordinator import Coordinator
+from core.skill_registry import SkillRegistry
+from storage.database import init_db, get_all_tasks, get_events_since, get_latest_event_id
+
+
+class CommandCenter(App):
+    BINDINGS = [("ctrl+enter", "submit_mission", "Send mission")]
+
+    TITLE = "FORGE â€” Local Agent Command Center"
+    SUB_TITLE = "Mission Control / Ollama Runtime"
+    CSS = """
+    Screen { background: #0a0f18; color: #dce6f2; }
+    Header { background: #111a28; color: #e4eaf4; }
+    Footer { background: #111a28; color: #9fb0c5; }
+    #layout { height: 1fr; padding: 1; }
+    #sidebar { width: 38%; min-width: 34; border: round #2b3b52; padding: 1; background: #0f1724; }
+    #main { width: 1fr; margin-left: 1; }
+    .section-title { color: #8faeff; text-style: bold; height: 1; margin-bottom: 1; }
+    #brand { color: #a99aff; text-style: bold; height: 2; }
+    #subtitle { color: #63d6b0; height: 2; }
+    #stats { height: 8; border: round #2b3b52; padding: 1; margin-bottom: 1; }
+    #task-table { height: 1fr; border: round #2b3b52; background: #0c1420; }
+    #console { height: 1fr; border: round #2b3b52; padding: 1; background: #0b121d; }
+    #mission-input { height: 7; min-height: 5; margin-top: 1; border: round #607da8; background: #111a28; }
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.coordinator: Coordinator | None = None
+        self.event_cursor = 0
+        self._refreshing = False
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Horizontal(id="layout"):
+            with Vertical(id="sidebar"):
+                yield Static("â—†  F O R G E", id="brand")
+                yield Static("LOCAL AGENT ORCHESTRATION  â€¢  TUI", id="subtitle")
+                with Vertical(id="stats"):
+                    yield Static("SYSTEM STATUS", classes="section-title")
+                    yield Static("Missions / Tasks: starting...", id="stat-total")
+                    yield Static("Running: 0  |  Completed: 0", id="stat-state")
+                    yield Static("Failed / Blocked: 0", id="stat-failed")
+                yield Static("MISSION TASK GRAPH", classes="section-title")
+                yield DataTable(id="task-table", zebra_stripes=True)
+            with Vertical(id="main"):
+                yield Static("LIVE RUNTIME CONSOLE", classes="section-title")
+                yield RichLog(id="console", wrap=True, markup=False, highlight=False, max_lines=5000)
+                yield TextArea(placeholder="Nháº­p nhiá»‡m vá»¥ nhiá»u dÃ²ng...  Enter: xuá»‘ng dÃ²ng | Ctrl+Enter: gá»­i | /help: trá»£ giÃºp", id="mission-input", soft_wrap=True, show_line_numbers=False)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        console = self.query_one("#console", RichLog)
+        table = self.query_one("#task-table", DataTable)
+        table.add_columns("ID", "STATUS", "SKILL", "TASK")
+        try:
+            init_db()
+            self.event_cursor = get_latest_event_id()
+            self.coordinator = Coordinator()
+            skills = ", ".join(sorted(SkillRegistry.get_manifests()[i]["name"] for i in range(len(SkillRegistry.get_manifests()))))
+            console.write(Text("FORGE runtime initialized.", style="bold #a99aff"))
+            console.write(Text(f"Skills: {skills or 'none'}"))
+            console.write(Text("Nháº­p yÃªu cáº§u trá»±c tiáº¿p vÃ o Ã´ bÃªn dÆ°á»›i. Scheduler sáº½ cháº¡y ná»n; giao diá»‡n tá»± cáº­p nháº­t."))
+            for issue in SkillRegistry.get_errors():
+                console.write(Text(f"[PLUGIN ERROR] {issue}", style="bold red"))
+        except Exception as exc:
+            console.write(Text(f"KhÃ´ng khá»Ÿi táº¡o Ä‘Æ°á»£c FORGE: {exc}", style="bold red"))
+        self.set_interval(0.8, self.refresh_data)
+        self.query_one("#mission-input", TextArea).focus()
+        self.refresh_data()
+
+    def action_submit_mission(self) -> None:
+        """Submit the multiline mission editor; Enter remains a newline."""
+        editor = self.query_one("#mission-input", TextArea)
+        raw = editor.text.strip()
+        if not raw:
+            return
+        editor.text = ""
+        console = self.query_one("#console", RichLog)
+        if raw.startswith("/") and "\n" not in raw:
+            self._handle_command(raw)
+            editor.focus()
+            return
+        if not self.coordinator:
+            console.write(Text("FORGE chÆ°a khá»Ÿi táº¡o Ä‘Æ°á»£c; xem lá»—i á»Ÿ console phÃ­a trÃªn.", style="bold red"))
+            editor.focus()
+            return
+        try:
+            mission_id = self.coordinator.submit_mission(raw)
+            console.write(Text(f"\n> {raw}", style="bold #79a9ff"))
+            console.write(Text(f"Mission {mission_id} Ä‘Ã£ Ä‘Æ°á»£c Ä‘Æ°a vÃ o hÃ ng xá»­ lÃ½. TUI khÃ´ng bá»‹ khÃ³a."))
+        except Exception as exc:
+            console.write(Text(f"KhÃ´ng gá»­i Ä‘Æ°á»£c nhiá»‡m vá»¥: {exc}", style="bold red"))
+        editor.focus()
+        self.refresh_data()
+
+    def _handle_command(self, command: str) -> None:
+        console = self.query_one("#console", RichLog)
+        cmd = command.split()[0].lower()
+        if cmd == "/help":
+            console.write(Text("Lá»‡nh: /help  /tasks  /status  /clear  /quit"))
+            console.write(Text("Soáº¡n nhiá»‡m vá»¥ nhiá»u dÃ²ng: Enter xuá»‘ng dÃ²ng, Ctrl+Enter gá»­i."))
+        elif cmd == "/clear":
+            console.clear()
+        elif cmd == "/tasks":
+            self.refresh_data()
+            console.write(Text("ÄÃ£ lÃ m má»›i danh sÃ¡ch task."))
+        elif cmd == "/status":
+            rows = get_all_tasks()
+            console.write(Text(f"Tá»•ng task hiá»‡n cÃ³: {len(rows)}"))
+            for row in rows[:20]:
+                console.write(Text(f"{row['task_id']}  {row['status']}  {row['title']}"))
+        elif cmd == "/quit":
+            self.exit()
+        else:
+            console.write(Text("Lá»‡nh khÃ´ng há»£p lá»‡. GÃµ /help Ä‘á»ƒ xem trá»£ giÃºp."))
+
+    def refresh_data(self) -> None:
+        if self._refreshing:
+            return
+        self._refreshing = True
+        try:
+            rows = get_all_tasks(limit=150)
+            table = self.query_one("#task-table", DataTable)
+            table.clear(columns=False)
+            counts = {"RUNNING": 0, "COMPLETED": 0, "FAILED": 0, "BLOCKED": 0, "WAITING_APPROVAL": 0, "CREATED": 0}
+            for row in rows:
+                status = str(row["status"] or "UNKNOWN")
+                counts[status] = counts.get(status, 0) + 1
+                title = str(row["title"] or "")
+                if len(title) > 42:
+                    title = title[:39] + "..."
+                table.add_row(str(row["task_id"]), status, str(row["skill_name"] or ""), title, key=str(row["task_id"]))
+            self.query_one("#stat-total", Static).update(f"Tasks: {len(rows)}  |  Active: {counts['RUNNING'] + counts['CREATED']}")
+            self.query_one("#stat-state", Static).update(f"Running: {counts['RUNNING']}  |  Completed: {counts['COMPLETED']}")
+            self.query_one("#stat-failed", Static).update(f"Failed: {counts['FAILED']}  |  Blocked: {counts['BLOCKED']}  |  Review: {counts['WAITING_APPROVAL']}")
+            events = get_events_since(self.event_cursor, limit=250)
+            console = self.query_one("#console", RichLog)
+            for item in events:
+                level = str(item["level"] or "INFO")
+                style = "bold red" if level in {"ERROR", "WARN"} else ("bold green" if level == "SUCCESS" else "#cbd5e1")
+                prefix = f"[{level}] "
+                console.write(Text(prefix + str(item["message"]), style=style))
+                self.event_cursor = int(item["id"])
+        except Exception as exc:
+            self.query_one("#console", RichLog).write(Text(f"Refresh error: {exc}", style="red"))
+        finally:
+            self._refreshing = False
+
+
+if __name__ == "__main__":
+    CommandCenter().run()
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\core\coordinator.py
+from __future__ import annotations
+import threading
+import uuid
+from agents.planner import PlannerAgent
+from core.scheduler import TaskScheduler
+from core.skill_registry import SkillRegistry
+from core.task import Task, TaskStatus
+from storage.database import init_db, save_mission, save_task, emit_event
+from config import FORGE_MAX_ACTIVE_MISSIONS
+
+
+class Coordinator:
+    _mission_semaphore = threading.Semaphore(FORGE_MAX_ACTIVE_MISSIONS)
+    def __init__(self, planner: PlannerAgent | None = None):
+        init_db()
+        SkillRegistry.discover_skills()
+        self.planner = planner or PlannerAgent()
+        self.scheduler = TaskScheduler()
+        self._threads: dict[str, threading.Thread] = {}
+        interrupted = 0
+        try:
+            from storage.database import recover_interrupted_tasks
+            interrupted = recover_interrupted_tasks()
+        except Exception:
+            pass
+        if interrupted:
+            emit_event(f"ÄÃ¡nh dáº¥u {interrupted} task bá»‹ giÃ¡n Ä‘oáº¡n tá»« phiÃªn trÆ°á»›c; khÃ´ng tá»± cháº¡y láº¡i side-effect.", "WARN")
+
+    def submit_mission(self, user_request: str) -> str:
+        request = user_request.strip()
+        if not request:
+            raise ValueError("Nhiá»‡m vá»¥ khÃ´ng Ä‘Æ°á»£c Ä‘á»ƒ trá»‘ng.")
+        mission_id = uuid.uuid4().hex[:10]
+        save_mission(mission_id, request, "QUEUED")
+        emit_event(f"ÄÃ£ nháº­n mission {mission_id}: {request}", "INFO", mission_id)
+        thread = threading.Thread(target=self._run_mission, args=(mission_id, request), daemon=True, name=f"forge-mission-{mission_id}")
+        self._threads[mission_id] = thread
+        thread.start()
+        return mission_id
+
+    def execute_sync(self, user_request: str) -> tuple[str, list[Task], bool]:
+        request = user_request.strip()
+        mission_id = uuid.uuid4().hex[:10]
+        save_mission(mission_id, request, "PLANNING")
+        tasks = self._plan_tasks(mission_id, request)
+        success = self.scheduler.run_graph(tasks, mission_id)
+        status = "COMPLETED" if success else "FAILED"
+        save_mission(mission_id, request, status, f"{sum(t.status == TaskStatus.COMPLETED for t in tasks)}/{len(tasks)} task hoÃ n thÃ nh")
+        return mission_id, tasks, success
+
+    def _plan_tasks(self, mission_id: str, request: str) -> list[Task]:
+        emit_event("Planner Ä‘ang phÃ¢n tÃ­ch yÃªu cáº§u vÃ  xÃ¢y dá»±ng DAG...", "INFO", mission_id)
+        task_data = self.planner.create_task_graph(request)
+        # Planner IDs are local to a mission (often t1/t2); namespace them globally for SQLite.
+        id_map = {str(item["task_id"]): f"{mission_id}_{item['task_id']}" for item in task_data}
+        tasks = [Task(
+            task_id=id_map[str(item["task_id"])], title=str(item["title"]),
+            description=str(item.get("description", "")), task_type=str(item.get("task_type", "GENERAL")),
+            skill_name=str(item["skill_name"]),
+            dependencies=[id_map[str(dep)] for dep in item.get("dependencies", [])],
+            input_data=dict(item.get("input_data", {})), mission_id=mission_id,
+        ) for item in task_data]
+        for task in tasks:
+            save_task(task)
+        emit_event(f"Planner Ä‘Ã£ táº¡o {len(tasks)} task: " + ", ".join(t.task_id for t in tasks), "INFO", mission_id)
+        return tasks
+
+    def _run_mission(self, mission_id: str, request: str) -> None:
+        with self._mission_semaphore:
+            save_mission(mission_id, request, "PLANNING")
+            try:
+                tasks = self._plan_tasks(mission_id, request)
+                success = self.scheduler.run_graph(tasks, mission_id)
+                status = "COMPLETED" if success else "FAILED"
+                summary = f"{sum(t.status == TaskStatus.COMPLETED for t in tasks)}/{len(tasks)} task hoÃ n thÃ nh"
+                save_mission(mission_id, request, status, summary)
+                emit_event(f"Mission {mission_id} káº¿t thÃºc: {status} ({summary}).", "SUCCESS" if success else "ERROR", mission_id)
+            except Exception as exc:
+                save_mission(mission_id, request, "FAILED", str(exc))
+                emit_event(f"Mission {mission_id} lá»—i: {exc}", "ERROR", mission_id)
+            finally:
+                self._threads.pop(mission_id, None)
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\core\ollama.py
+"""Small Ollama client using only the Python standard library."""
+from __future__ import annotations
+import json
+import threading
+import urllib.error
+import urllib.request
+from config import OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT
+
+
+class OllamaError(RuntimeError):
+    pass
+
+
+class OllamaClient:
+    _request_lock = threading.Semaphore(1)  # Avoid competing large model loads on local hardware.
+    def __init__(self, model: str | None = None, timeout: int | None = None):
+        self.model = model or OLLAMA_MODEL
+        self.timeout = timeout or OLLAMA_TIMEOUT
+        self.url = f"{OLLAMA_BASE_URL}/api/chat"
+
+    def chat(self, messages: list[dict[str, str]], temperature: float = 0.1, json_mode: bool = False) -> str:
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": temperature},
+        }
+        if json_mode:
+            payload["format"] = "json"
+        request = urllib.request.Request(
+            self.url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with self._request_lock:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace")[:1200]
+            raise OllamaError(f"Ollama tráº£ HTTP {exc.code} cho model '{self.model}': {details}") from exc
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            raise OllamaError(
+                f"KhÃ´ng káº¿t ná»‘i Ä‘Æ°á»£c Ollama táº¡i {OLLAMA_BASE_URL}. "
+                f"HÃ£y má»Ÿ Ollama vÃ  thá»­ láº¡i. Chi tiáº¿t: {reason}"
+            ) from exc
+        except TimeoutError as exc:
+            raise OllamaError(f"Ollama quÃ¡ thá»i gian chá» ({self.timeout}s).") from exc
+        except Exception as exc:
+            raise OllamaError(f"Pháº£n há»“i Ollama khÃ´ng há»£p lá»‡: {exc}") from exc
+        content = data.get("message", {}).get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise OllamaError("Ollama tráº£ vá» ná»™i dung rá»—ng.")
+        return content.strip()
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\core\scheduler.py
+from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
+from core.task import Task, TaskStatus, ExecutionStatus
+from core.skill_registry import SkillRegistry
+from config import FORGE_MAX_WORKERS
+from storage.database import save_task, emit_event, save_checkpoint, save_mission, log_execution
+
+
+class TaskScheduler:
+    def __init__(self, event_sink: Callable | None = None, max_workers: int | None = None):
+        self.event_sink = event_sink
+        self.max_workers = max_workers or FORGE_MAX_WORKERS
+
+    def _emit(self, message: str, level: str, mission_id: str, task_id: str = "") -> None:
+        emit_event(message, level, mission_id, task_id)
+        if self.event_sink:
+            try:
+                self.event_sink(message, level, mission_id, task_id)
+            except Exception:
+                pass
+
+    def run_graph(self, tasks: list[Task], mission_id: str = "") -> bool:
+        by_id = {task.task_id: task for task in tasks}
+        if len(by_id) != len(tasks):
+            raise ValueError("Task graph cÃ³ task_id trÃ¹ng nhau.")
+        for task in tasks:
+            task.mission_id = mission_id or task.mission_id
+            unknown = set(task.dependencies) - set(by_id)
+            if unknown:
+                raise ValueError(f"Task {task.task_id} cÃ³ dependency khÃ´ng tá»“n táº¡i: {', '.join(sorted(unknown))}")
+            save_task(task)
+        pending = set(by_id)
+        failed_any = False
+        self._emit(f"Scheduler báº¯t Ä‘áº§u: {len(tasks)} task, tá»‘i Ä‘a {self.max_workers} luá»“ng song song.", "INFO", mission_id)
+
+        while pending:
+            # Block downstream nodes as soon as one dependency has failed/blocked.
+            for task_id in list(pending):
+                task = by_id[task_id]
+                dependency_states = [by_id[d].status for d in task.dependencies]
+                if any(state in {TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.WAITING_APPROVAL} for state in dependency_states):
+                    task.status = TaskStatus.BLOCKED
+                    task.error = "Má»™t dependency khÃ´ng hoÃ n thÃ nh thÃ nh cÃ´ng."
+                    save_task(task)
+                    pending.remove(task_id)
+                    failed_any = True
+                    self._emit(f"Task {task.task_id} bá»‹ BLOCKED vÃ¬ dependency tháº¥t báº¡i.", "WARN", mission_id, task.task_id)
+
+            ready = [by_id[task_id] for task_id in pending
+                     if all(by_id[d].status == TaskStatus.COMPLETED for d in by_id[task_id].dependencies)]
+            if not ready:
+                if pending:
+                    for task_id in list(pending):
+                        task = by_id[task_id]
+                        task.status = TaskStatus.BLOCKED
+                        task.error = "Dependency graph bá»‹ chu trÃ¬nh hoáº·c khÃ´ng thá»ƒ giáº£i quyáº¿t."
+                        save_task(task)
+                        pending.remove(task_id)
+                        failed_any = True
+                    self._emit("PhÃ¡t hiá»‡n chu trÃ¬nh hoáº·c graph khÃ´ng thá»ƒ tiáº¿n triá»ƒn; cÃ¡c task cÃ²n láº¡i bá»‹ BLOCKED.", "ERROR", mission_id)
+                break
+
+            with ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix="forge-task") as pool:
+                futures = {pool.submit(self._execute_task, task, mission_id): task for task in ready}
+                for future in as_completed(futures):
+                    task = futures[future]
+                    try:
+                        success = future.result()
+                    except Exception as exc:
+                        success = False
+                        task.status = TaskStatus.FAILED
+                        task.error = str(exc)
+                        save_task(task)
+                        self._emit(f"Lá»—i Scheduler á»Ÿ task {task.task_id}: {exc}", "ERROR", mission_id, task.task_id)
+                    pending.discard(task.task_id)
+                    failed_any = failed_any or not success
+        return not failed_any and all(task.status == TaskStatus.COMPLETED for task in tasks)
+
+    def _execute_task(self, task: Task, mission_id: str) -> bool:
+        task.status = TaskStatus.RUNNING
+        save_task(task)
+        self._emit(f"â–¶ [{task.task_id}] {task.title} â€” skill: {task.skill_name}", "INFO", mission_id, task.task_id)
+        skill = SkillRegistry.get_skill(task.skill_name)
+        if skill is None:
+            task.status = TaskStatus.FAILED
+            task.error = f"KhÃ´ng tÃ¬m tháº¥y skill '{task.skill_name}'."
+            save_task(task)
+            self._emit(task.error, "ERROR", mission_id, task.task_id)
+            return False
+        params = dict(task.input_data)
+        params.setdefault("description", task.description)
+        params["task_id"] = task.task_id
+        try:
+            result = skill.execute(params)
+            import json
+            log_execution(task.task_id, "SkillRunner", skill.manifest.name,
+                          json.dumps(params, ensure_ascii=False, default=str)[:4000],
+                          result.status.value, result.output)
+            task.result = result.output
+            task.artifact_path = result.evidence or task.artifact_path
+            if result.status == ExecutionStatus.SUCCESS:
+                task.status = TaskStatus.COMPLETED
+                task.error = ""
+                save_task(task)
+                save_checkpoint(task.task_id, "skill_completed", task.artifact_path)
+                self._emit(f"âœ“ [{task.task_id}] HoÃ n thÃ nh. {result.output[:500]}", "SUCCESS", mission_id, task.task_id)
+                return True
+            if result.status == ExecutionStatus.APPROVAL_REQUIRED:
+                task.status = TaskStatus.WAITING_APPROVAL
+            else:
+                task.status = TaskStatus.FAILED
+            task.error = result.output
+            save_task(task)
+            self._emit(f"âœ— [{task.task_id}] {result.status.value}: {result.output[:800]}", "ERROR", mission_id, task.task_id)
+            return False
+        except Exception as exc:
+            try:
+                log_execution(task.task_id, "SkillRunner", task.skill_name, "{}", "FAILED", str(exc))
+            except Exception:
+                pass
+            task.status = TaskStatus.FAILED
+            task.error = str(exc)
+            task.result = str(exc)
+            save_task(task)
+            self._emit(f"âœ— [{task.task_id}] Ngoáº¡i lá»‡: {exc}", "ERROR", mission_id, task.task_id)
+            return False
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\core\skill.py
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Any
+from core.task import ExecutionResult
+
+
+@dataclass
+class SkillManifest:
+    name: str
+    version: str = "1.0.0"
+    description: str = ""
+    input_schema: dict[str, Any] = field(default_factory=dict)
+    permissions: list[str] = field(default_factory=list)
+
+
+class BaseSkill:
+    """Contract for plugins. Scheduler knows only this interface."""
+    def __init__(self) -> None:
+        self.manifest = self.get_manifest()
+
+    def get_manifest(self) -> SkillManifest:
+        raise NotImplementedError
+
+    def execute(self, params: dict[str, Any]) -> ExecutionResult:
+        raise NotImplementedError
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\core\skill_registry.py
+from __future__ import annotations
+import importlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+from config import ROOT_DIR, SKILLS_DIR
+from core.skill import BaseSkill
+
+
+class SkillRegistry:
+    _skills: dict[str, BaseSkill] = {}
+    _errors: list[str] = []
+
+    @classmethod
+    def discover_skills(cls, force: bool = False) -> dict[str, BaseSkill]:
+        if cls._skills and not force:
+            return cls._skills
+        cls._skills.clear()
+        cls._errors.clear()
+        root = str(ROOT_DIR)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+        for folder in sorted(SKILLS_DIR.iterdir()):
+            manifest_path = folder / "manifest.json"
+            module_path = folder / "skill.py"
+            if not folder.is_dir() or not manifest_path.is_file() or not module_path.is_file():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if manifest.get("enabled", True) is False:
+                    continue
+                module = importlib.import_module(f"skills.{folder.name}.skill")
+                importlib.reload(module)
+                candidates = [
+                    getattr(module, name) for name in dir(module)
+                    if isinstance(getattr(module, name), type)
+                    and issubclass(getattr(module, name), BaseSkill)
+                    and getattr(module, name) is not BaseSkill
+                    and getattr(module, name).__module__ == module.__name__
+                ]
+                if len(candidates) != 1:
+                    raise ValueError(f"Cáº§n Ä‘Ãºng 1 class BaseSkill trong {folder.name}, tÃ¬m tháº¥y {len(candidates)}")
+                instance = candidates[0]()
+                declared_name = manifest.get("name")
+                if declared_name and declared_name != instance.manifest.name:
+                    raise ValueError(f"TÃªn manifest '{declared_name}' khÃ´ng khá»›p skill '{instance.manifest.name}'")
+                if instance.manifest.name in cls._skills:
+                    raise ValueError(f"TrÃ¹ng tÃªn skill: {instance.manifest.name}")
+                cls._skills[instance.manifest.name] = instance
+            except Exception as exc:
+                cls._errors.append(f"{folder.name}: {exc}")
+        return cls._skills
+
+    @classmethod
+    def get_skill(cls, name: str) -> BaseSkill | None:
+        return cls._skills.get(name)
+
+    @classmethod
+    def get_manifests(cls) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": skill.manifest.name,
+                "version": skill.manifest.version,
+                "description": skill.manifest.description,
+                "input_schema": skill.manifest.input_schema,
+                "permissions": skill.manifest.permissions,
+            }
+            for skill in cls._skills.values()
+        ]
+
+    @classmethod
+    def get_manifest_context(cls) -> str:
+        return json.dumps(cls.get_manifests(), ensure_ascii=False, indent=2)
+
+    @classmethod
+    def get_errors(cls) -> list[str]:
+        return list(cls._errors)
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\core\task.py
+from __future__ import annotations
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
+
+
+class TaskStatus(str, Enum):
+    CREATED = "CREATED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    BLOCKED = "BLOCKED"
+    WAITING_APPROVAL = "WAITING_APPROVAL"
+
+
+class ExecutionStatus(str, Enum):
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    DENIED = "DENIED"
+    APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+
+
+@dataclass
+class ExecutionResult:
+    status: ExecutionStatus
+    output: str
+    exit_code: int | None = None
+    evidence: str | None = None
+
+
+@dataclass
+class Task:
+    task_id: str
+    title: str
+    description: str = ""
+    task_type: str = "GENERAL"
+    skill_name: str = ""
+    dependencies: list[str] = field(default_factory=list)
+    input_data: dict[str, Any] = field(default_factory=dict)
+    mission_id: str = ""
+    status: TaskStatus = TaskStatus.CREATED
+    artifact_path: str | None = None
+    result: str = ""
+    error: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "title": self.title,
+            "description": self.description,
+            "status": self.status.value,
+            "task_type": self.task_type,
+            "skill_name": self.skill_name,
+            "dependencies": self.dependencies,
+            "input_data": self.input_data,
+            "mission_id": self.mission_id,
+            "artifact_path": self.artifact_path,
+            "result": self.result,
+            "error": self.error,
+            "created_at": self.created_at.isoformat(),
+        }
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\execution\tools\filesystem.py
+from core.task import ExecutionResult, ExecutionStatus
+from execution.permission_engine import PermissionEngine, SecurityViolation
+
+
+def write_file(filename: str, content: str) -> ExecutionResult:
+    try:
+        target = PermissionEngine.ensure_parent(filename)
+        if target.exists():
+            return ExecutionResult(ExecutionStatus.DENIED, f"File Ä‘Ã£ tá»“n táº¡i: {target}")
+        target.write_text(content, encoding="utf-8")
+        return ExecutionResult(ExecutionStatus.SUCCESS, f"ÄÃ£ táº¡o {target}", evidence=str(target))
+    except SecurityViolation as exc:
+        return ExecutionResult(ExecutionStatus.DENIED, str(exc))
+    except Exception as exc:
+        return ExecutionResult(ExecutionStatus.FAILED, str(exc))
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\execution\tools\terminal.py
+from __future__ import annotations
+import os
+import subprocess
+import sys
+from core.task import ExecutionResult, ExecutionStatus
+from execution.permission_engine import PermissionEngine, SecurityViolation
+from config import WORKSPACE_DIR
+
+
+def run_python_script(filename: str, timeout: int = 45) -> ExecutionResult:
+    try:
+        if not filename.lower().endswith(".py"):
+            return ExecutionResult(ExecutionStatus.DENIED, "Chá»‰ há»— trá»£ file .py")
+        path = PermissionEngine.validate_path(filename)
+        if not path.is_file():
+            return ExecutionResult(ExecutionStatus.FAILED, f"KhÃ´ng tá»“n táº¡i file: {filename}")
+        proc = subprocess.run([sys.executable, str(path)], cwd=str(WORKSPACE_DIR), capture_output=True,
+                              text=True, timeout=timeout, check=False, env=os.environ.copy())
+        output = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return ExecutionResult(ExecutionStatus.SUCCESS if proc.returncode == 0 else ExecutionStatus.FAILED,
+                               output[-5000:], exit_code=proc.returncode, evidence=str(path))
+    except SecurityViolation as exc:
+        return ExecutionResult(ExecutionStatus.DENIED, str(exc))
+    except subprocess.TimeoutExpired:
+        return ExecutionResult(ExecutionStatus.FAILED, f"Script vÆ°á»£t quÃ¡ {timeout} giÃ¢y.")
+    except Exception as exc:
+        return ExecutionResult(ExecutionStatus.FAILED, f"Lá»—i runtime: {exc}")
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\execution\permission_engine.py
+from __future__ import annotations
+from pathlib import Path
+from config import WORKSPACE_DIR
+
+
+class SecurityViolation(Exception):
+    pass
+
+
+class PermissionEngine:
+    @staticmethod
+    def validate_path(relative_path: str | Path) -> Path:
+        raw = Path(relative_path)
+        if raw.is_absolute():
+            raise SecurityViolation("Chá»‰ cháº¥p nháº­n Ä‘Æ°á»ng dáº«n tÆ°Æ¡ng Ä‘á»‘i bÃªn trong workspace.")
+        root = WORKSPACE_DIR.resolve()
+        target = (root / raw).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise SecurityViolation(f"Tá»« chá»‘i truy cáº­p ngoÃ i workspace: {target}") from exc
+        return target
+
+    @staticmethod
+    def ensure_parent(relative_path: str | Path) -> Path:
+        target = PermissionEngine.validate_path(relative_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Resolve again after mkdir to guard against unexpected symlink traversal.
+        return PermissionEngine.validate_path(target.relative_to(WORKSPACE_DIR.resolve()))
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\execution\tool_dispatcher.py
+from __future__ import annotations
+import json
+from core.task import ExecutionResult, ExecutionStatus
+from core.skill_registry import SkillRegistry
+from storage.database import log_execution
+
+
+class ToolDispatcher:
+    """Compatibility dispatcher. New code should call skills through TaskScheduler."""
+    def __init__(self, task_id: str, agent_name: str):
+        self.task_id = task_id
+        self.agent_name = agent_name
+
+    def execute(self, tool_name: str, arguments: dict) -> ExecutionResult:
+        legacy = {"write_file": "write_file", "run_python_script": "run_python", "render_remotion_video": "render_video"}
+        skill_name = legacy.get(tool_name, tool_name)
+        skill = SkillRegistry.get_skill(skill_name)
+        if skill is None:
+            SkillRegistry.discover_skills()
+            skill = SkillRegistry.get_skill(skill_name)
+        if skill is None:
+            return ExecutionResult(ExecutionStatus.DENIED, f"KhÃ´ng cÃ³ skill/tool '{tool_name}'.")
+        try:
+            result = skill.execute(arguments)
+            log_execution(self.task_id, self.agent_name, tool_name,
+                          json.dumps(arguments, ensure_ascii=False), result.status.value, result.output)
+            return result
+        except Exception as exc:
+            log_execution(self.task_id, self.agent_name, tool_name,
+                          json.dumps(arguments, ensure_ascii=False), "FAILED", str(exc))
+            return ExecutionResult(ExecutionStatus.FAILED, str(exc))
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\legacy_reference\tests\test_blender.py
+# test_blender.py
+from storage.database import init_db
+from core.task import Task, TaskType
+from core.scheduler import TaskScheduler
+
+if __name__ == "__main__":
+    init_db()
+    scheduler = TaskScheduler()
+    
+    # Test 2 & 3: Táº¡o scene Cube vÃ  Render
+    task = Task(
+        task_id="t_cube",
+        title="Render Cube",
+        description="""Viáº¿t script Blender Ä‘á»ƒ:
+1. XÃ³a háº¿t object máº·c Ä‘á»‹nh.
+2. Táº¡o 1 khá»‘i láº­p phÆ°Æ¡ng.
+3. Táº¡o 1 Camera hÆ°á»›ng vÃ o khá»‘i láº­p phÆ°Æ¡ng.
+4. Táº¡o 1 Ä‘Ã¨n Sun.
+5. Set render engine lÃ  BLENDER_EEVEE.
+6. Render vÃ  lÆ°u file áº£nh.""",
+        task_type=TaskType.BLENDER_SCRIPT
+    )
+    
+    scheduler.run_graph([task])
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\legacy_reference\tests\test_mission01.py
+from core.coordinator import Coordinator
+
+if __name__ == "__main__":
+    forge = Coordinator()
+    # YÃªu cáº§u Ä‘áº¡o diá»…n táº¡o video 2 cáº£nh
+    request = "Táº¡o video 2 cáº£nh cho phim THE LAST LIGHT. Cáº£nh 1 mÃ u Ä‘en, chá»¯ THE LAST LIGHT. Cáº£nh 2 mÃ u xanh, háº¡t bá»¥i bay."
+    forge.execute(request)
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\production\blender\adapter.py
+import subprocess
+import os
+import ast
+from config import BLENDER_EXECUTABLE, WORKSPACE_DIR
+from core.task import ExecutionResult, ExecutionStatus
+from execution.permission_engine import PermissionEngine
+
+class BlenderAdapter:
+    @staticmethod
+    def _is_script_safe(script_path: str) -> bool:
+        """Lá»›p báº£o vá»‡ 1: QuÃ©t AST (Chá»‰ cháº·n cÃ¡c import nguy hiá»ƒm)"""
+        with open(script_path, "r", encoding="utf-8") as f:
+            code = f.read()
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name in ["os", "sys", "subprocess", "shutil"]:
+                            return False
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module in ["os", "sys", "subprocess", "shutil"]:
+                        return False
+        except SyntaxError:
+            return False
+        return True
+
+    @staticmethod
+    def execute_blender_script(script_filename: str, task_id: str) -> ExecutionResult:
+        # Lá»›p báº£o vá»‡ 2: Kiá»ƒm tra Ä‘Æ°á»ng dáº«n (Chá»‘ng Path Traversal)
+        try:
+            script_path = os.path.join(WORKSPACE_DIR, script_filename)
+            safe_script_path = PermissionEngine.validate_path(script_path)
+            
+            # Táº¡o thÆ° má»¥c output riÃªng biá»‡t cho task nÃ y
+            task_out_dir = os.path.join(WORKSPACE_DIR, "projects", "default_project", "tasks", task_id)
+            os.makedirs(task_out_dir, exist_ok=True)
+            
+            blend_path = os.path.join(task_out_dir, "scene.blend")
+            image_path = os.path.join(task_out_dir, "render.png")
+            
+        except Exception as e:
+            return ExecutionResult(status=ExecutionStatus.DENIED, output=f"Lá»—i Ä‘Æ°á»ng dáº«n: {e}")
+
+        # Lá»›p báº£o vá»‡ 3: AST
+        if not BlenderAdapter._is_script_safe(safe_script_path):
+            return ExecutionResult(status=ExecutionStatus.DENIED, output="Lá»—i báº£o máº­t: Script chá»©a mÃ£ nguy hiá»ƒm.")
+
+        try:
+            print(f"    ðŸŽ¬ [BLENDER] Äang render Task {task_id}...")
+            result = subprocess.run(
+                [BLENDER_EXECUTABLE, "-b", "--python", safe_script_path],
+                cwd=task_out_dir, # Cháº¡y trong thÆ° má»¥c cá»§a task
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            if result.returncode != 0:
+                return ExecutionResult(status=ExecutionStatus.FAILED, output=f"Blender bÃ¡o lá»—i:\n{result.stderr}")
+
+            # QA: Kiá»ƒm tra file thá»±c táº¿ (ÄÃ£ sá»­a theo Ä‘Ãºng yÃªu cáº§u)
+            from production.blender.artifact_validator import ArtifactValidator
+            is_valid, qa_msg = ArtifactValidator.validate_render(image_path, blend_path)
+            
+            if not is_valid:
+                return ExecutionResult(status=ExecutionStatus.FAILED, output=f"QA Tháº¥t báº¡i: {qa_msg}")
+
+            return ExecutionResult(
+                status=ExecutionStatus.SUCCESS, 
+                output=f"Render thÃ nh cÃ´ng!\n{qa_msg}",
+                evidence=image_path
+            )
+            
+        except subprocess.TimeoutExpired:
+            return ExecutionResult(status=ExecutionStatus.FAILED, output="Lá»—i: Timeout 5 phÃºt.")
+        except Exception as e:
+            return ExecutionResult(status=ExecutionStatus.FAILED, output=f"Lá»—i Adapter: {e}")
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\skills\create_3d_scene\skill.py
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from config import WORKSPACE_DIR
+from contracts.scene3d import Scene3DSpec
+from core.skill import BaseSkill, SkillManifest
+from core.task import ExecutionResult, ExecutionStatus
+
+
+class Create3DSceneSkill(BaseSkill):
+    def get_manifest(self) -> SkillManifest:
+        return SkillManifest(
+            name="create_3d_scene",
+            description="Validate and save a Motion Studio SceneSpec v1 to workspace/projects/<project_id>/scene.json.",
+            input_schema={"scene": "complete Scene3DSpec v1 object"},
+            permissions=["workspace:write"],
+        )
+
+    def execute(self, params: dict[str, Any]) -> ExecutionResult:
+        raw = params.get("scene")
+        if not isinstance(raw, dict):
+            return ExecutionResult(ExecutionStatus.FAILED, "Thiáº¿u input_data.scene dáº¡ng object Scene3DSpec.")
+        try:
+            scene = Scene3DSpec.model_validate(raw)
+        except Exception as exc:
+            return ExecutionResult(ExecutionStatus.FAILED, f"SceneSpec khÃ´ng há»£p lá»‡: {exc}")
+
+        project_dir = (WORKSPACE_DIR / "projects" / scene.project_id).resolve()
+        try:
+            project_dir.relative_to(WORKSPACE_DIR.resolve())
+        except ValueError:
+            return ExecutionResult(ExecutionStatus.DENIED, "project_id vÆ°á»£t khá»i workspace.")
+
+        try:
+            project_dir.mkdir(parents=True, exist_ok=True)
+            target = project_dir / "scene.json"
+            payload = json.dumps(scene.model_dump(mode="json"), ensure_ascii=False, indent=2)
+            fd, temp_name = tempfile.mkstemp(prefix=".scene-", suffix=".tmp", dir=str(project_dir))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_name, target)
+            finally:
+                if os.path.exists(temp_name):
+                    os.unlink(temp_name)
+            return ExecutionResult(
+                ExecutionStatus.SUCCESS,
+                f"ÄÃ£ lÆ°u SceneSpec '{scene.title}' vá»›i {len(scene.objects)} object.",
+                exit_code=0,
+                evidence=str(target),
+            )
+        except OSError as exc:
+            return ExecutionResult(ExecutionStatus.FAILED, f"KhÃ´ng thá»ƒ ghi SceneSpec: {exc}")
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\skills\python_task\skill.py
+from __future__ import annotations
+import os
+import subprocess
+import sys
+from pathlib import Path
+from agents.coder import CoderAgent
+from config import FORGE_ENABLE_PYTHON_EXECUTION, FORGE_MAX_REPAIR_ROUNDS, WORKSPACE_DIR
+from core.skill import BaseSkill, SkillManifest
+from core.task import ExecutionResult, ExecutionStatus
+from execution.permission_engine import PermissionEngine, SecurityViolation
+
+
+class PythonTaskSkill(BaseSkill):
+    def __init__(self):
+        self.coder = CoderAgent()
+        super().__init__()
+
+    def get_manifest(self) -> SkillManifest:
+        return SkillManifest(
+            name="python_task", version="1.0.0",
+            description="DÃ¹ng Coder táº¡o file .py, thá»±c thi báº±ng Python vÃ  tá»± sá»­a lá»—i cÃ³ giá»›i háº¡n.",
+            input_schema={"prompt": "string", "filename": "string"},
+            permissions=["workspace_write", "python_execute"],
+        )
+
+    def execute(self, params: dict) -> ExecutionResult:
+        if not FORGE_ENABLE_PYTHON_EXECUTION:
+            return ExecutionResult(
+                ExecutionStatus.DENIED,
+                "Python execution Ä‘ang táº¯t. Äá»c README vÃ  Ä‘áº·t FORGE_ENABLE_PYTHON_EXECUTION=true trong .env náº¿u cháº¥p nháº­n cháº¡y mÃ£ do AI sinh trÃªn mÃ¡y nÃ y.",
+            )
+        prompt = str(params.get("prompt") or params.get("description") or "").strip()
+        filename = str(params.get("filename") or f"task_{params.get('task_id', 'generated')}.py")
+        if not prompt:
+            return ExecutionResult(ExecutionStatus.FAILED, "Thiáº¿u prompt mÃ´ táº£ chÆ°Æ¡ng trÃ¬nh.")
+        if not filename.lower().endswith(".py"):
+            return ExecutionResult(ExecutionStatus.DENIED, "TÃªn file pháº£i cÃ³ Ä‘uÃ´i .py.")
+        try:
+            target = PermissionEngine.ensure_parent(filename)
+            if target.exists():
+                return ExecutionResult(ExecutionStatus.APPROVAL_REQUIRED, f"File Ä‘Ã£ tá»“n táº¡i, khÃ´ng ghi Ä‘Ã¨: {target}")
+            code = self.coder.generate_code(prompt)
+            target.write_text(code + "\n", encoding="utf-8")
+            last_output = ""
+            for attempt in range(FORGE_MAX_REPAIR_ROUNDS + 1):
+                result = subprocess.run(
+                    [sys.executable, str(target)], cwd=str(WORKSPACE_DIR),
+                    capture_output=True, text=True, timeout=45, check=False,
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                )
+                last_output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+                if result.returncode == 0:
+                    return ExecutionResult(
+                        ExecutionStatus.SUCCESS,
+                        f"ChÆ°Æ¡ng trÃ¬nh cháº¡y thÃ nh cÃ´ng (lÆ°á»£t {attempt + 1}).\n{last_output[-3000:]}",
+                        exit_code=0, evidence=str(target),
+                    )
+                if attempt >= FORGE_MAX_REPAIR_ROUNDS:
+                    return ExecutionResult(ExecutionStatus.FAILED,
+                                           f"ÄÃ£ thá»­ {attempt + 1} lÆ°á»£t nhÆ°ng chÆ°Æ¡ng trÃ¬nh váº«n lá»—i.\n{last_output[-3000:]}",
+                                           exit_code=result.returncode, evidence=str(target))
+                code = self.coder.generate_code(prompt, previous_code=code, error=last_output[-5000:])
+                target.write_text(code + "\n", encoding="utf-8")
+            return ExecutionResult(ExecutionStatus.FAILED, last_output, evidence=str(target))
+        except SecurityViolation as exc:
+            return ExecutionResult(ExecutionStatus.DENIED, str(exc))
+        except subprocess.TimeoutExpired as exc:
+            return ExecutionResult(ExecutionStatus.FAILED, f"Script vÆ°á»£t quÃ¡ giá»›i háº¡n 45 giÃ¢y: {exc}", evidence=str(target))
+        except Exception as exc:
+            return ExecutionResult(ExecutionStatus.FAILED, f"Python task lá»—i: {exc}")
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\skills\render_3d_scene\skill.py
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from config import WORKSPACE_DIR
+from contracts.scene3d import Scene3DSpec
+from core.skill import BaseSkill, SkillManifest
+from core.task import ExecutionResult, ExecutionStatus
+from production.remotion.three_adapter import ThreeRemotionAdapter
+
+
+class Render3DSceneSkill(BaseSkill):
+    def get_manifest(self) -> SkillManifest:
+        return SkillManifest(
+            name="render_3d_scene",
+            description="Render an existing workspace/projects/<project_id>/scene.json to an MP4 using Remotion Three.js.",
+            input_schema={"project_id": "existing safe project id"},
+            permissions=["workspace:read", "workspace:write", "process:remotion-render"],
+        )
+
+    def execute(self, params: dict[str, Any]) -> ExecutionResult:
+        project_id = str(params.get("project_id", "")).strip()
+        if not project_id or not all(ch.isalnum() or ch in "-_" for ch in project_id):
+            return ExecutionResult(ExecutionStatus.DENIED, "project_id khÃ´ng há»£p lá»‡.")
+        scene_path = (WORKSPACE_DIR / "projects" / project_id / "scene.json").resolve()
+        try:
+            scene_path.relative_to(WORKSPACE_DIR.resolve())
+        except ValueError:
+            return ExecutionResult(ExecutionStatus.DENIED, "Scene náº±m ngoÃ i workspace.")
+        if not scene_path.is_file():
+            return ExecutionResult(ExecutionStatus.FAILED, f"KhÃ´ng tÃ¬m tháº¥y scene: {scene_path}")
+        try:
+            raw = json.loads(scene_path.read_text(encoding="utf-8"))
+            spec = Scene3DSpec.model_validate(raw)
+        except Exception as exc:
+            return ExecutionResult(ExecutionStatus.FAILED, f"SceneSpec khÃ´ng thá»ƒ Ä‘á»c/validate: {exc}")
+        if spec.project_id != project_id:
+            return ExecutionResult(ExecutionStatus.DENIED, "project_id trong scene khÃ´ng khá»›p thÆ° má»¥c project.")
+        return ThreeRemotionAdapter.render_scene(spec.model_dump(mode="json"), str(params.get("task_id", "render-3d")))
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\skills\render_video\skill.py
+from __future__ import annotations
+from core.skill import BaseSkill, SkillManifest
+from core.task import ExecutionResult, ExecutionStatus
+from production.remotion.adapter import RemotionAdapter
+
+
+class RemotionSkill(BaseSkill):
+    def get_manifest(self) -> SkillManifest:
+        return SkillManifest(
+            name="render_video", version="1.0.0",
+            description="Render video motion graphic báº±ng Remotion; nháº­n VideoSpec JSON trong input_data.spec.",
+            input_schema={"spec": "VideoSpec object"},
+            permissions=["workspace_read", "workspace_write", "remotion_render"],
+        )
+
+    def execute(self, params: dict) -> ExecutionResult:
+        spec = params.get("spec")
+        if spec is None and params.get("spec_filename"):
+            return RemotionAdapter.render_video_file(str(params["spec_filename"]), str(params.get("task_id", "task")))
+        return RemotionAdapter.render_video(spec, str(params.get("task_id", "task")))
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\skills\run_python\skill.py
+from __future__ import annotations
+from config import FORGE_ENABLE_PYTHON_EXECUTION
+from core.skill import BaseSkill, SkillManifest
+from core.task import ExecutionResult, ExecutionStatus
+from execution.tools.terminal import run_python_script
+
+
+class RunPythonSkill(BaseSkill):
+    def get_manifest(self) -> SkillManifest:
+        return SkillManifest(
+            name="run_python", version="1.0.0",
+            description="Cháº¡y file .py Ä‘Ã£ cÃ³ trong workspace vÃ  tráº£ stdout/stderr.",
+            input_schema={"filename": "string", "timeout": "integer optional"},
+            permissions=["workspace_read", "python_execute"],
+        )
+
+    def execute(self, params: dict) -> ExecutionResult:
+        if not FORGE_ENABLE_PYTHON_EXECUTION:
+            return ExecutionResult(ExecutionStatus.DENIED,
+                                  "Python execution Ä‘ang táº¯t. Báº­t FORGE_ENABLE_PYTHON_EXECUTION=true trong .env sau khi Ä‘á»c cáº£nh bÃ¡o an toÃ n.")
+        filename = params.get("filename")
+        if not isinstance(filename, str) or not filename.strip():
+            return ExecutionResult(ExecutionStatus.FAILED, "Thiáº¿u filename.")
+        timeout = params.get("timeout", 45)
+        try:
+            timeout = max(1, min(int(timeout), 180))
+        except (TypeError, ValueError):
+            timeout = 45
+        return run_python_script(filename, timeout=timeout)
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\skills\write_file\skill.py
+from __future__ import annotations
+from core.skill import BaseSkill, SkillManifest
+from core.task import ExecutionResult, ExecutionStatus
+from execution.permission_engine import PermissionEngine, SecurityViolation
+
+
+class WriteFileSkill(BaseSkill):
+    def get_manifest(self) -> SkillManifest:
+        return SkillManifest(
+            name="write_file", version="1.0.0",
+            description="Táº¡o file má»›i bÃªn trong workspace. KhÃ´ng ghi Ä‘Ã¨ file Ä‘Ã£ tá»“n táº¡i.",
+            input_schema={"filename": "string", "content": "string"},
+            permissions=["workspace_write"],
+        )
+
+    def execute(self, params: dict) -> ExecutionResult:
+        filename = params.get("filename")
+        content = params.get("content")
+        if not isinstance(filename, str) or not filename.strip() or not isinstance(content, str):
+            return ExecutionResult(ExecutionStatus.FAILED, "Thiáº¿u filename hoáº·c content dáº¡ng chuá»—i.")
+        try:
+            target = PermissionEngine.ensure_parent(filename)
+            if target.exists():
+                return ExecutionResult(ExecutionStatus.DENIED,
+                                       f"File Ä‘Ã£ tá»“n táº¡i: {target}. HÃ£y chá»n tÃªn má»›i; FORGE khÃ´ng tá»± ghi Ä‘Ã¨.")
+            target.write_text(content, encoding="utf-8", newline="\n")
+            return ExecutionResult(ExecutionStatus.SUCCESS, f"ÄÃ£ táº¡o {target.name} ({target.stat().st_size} bytes).", evidence=str(target))
+        except SecurityViolation as exc:
+            return ExecutionResult(ExecutionStatus.DENIED, str(exc))
+        except Exception as exc:
+            return ExecutionResult(ExecutionStatus.FAILED, f"KhÃ´ng thá»ƒ táº¡o file: {exc}")
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\storage\database.py
+from __future__ import annotations
+import json
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from typing import Any
+from config import DB_PATH, STORAGE_DIR
+
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(DB_PATH), timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+@contextmanager
+def _db():
+    conn = _connect()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def init_db() -> None:
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _db() as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("""CREATE TABLE IF NOT EXISTS missions (
+            mission_id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,
+            summary TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS tasks (
+            task_id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,
+            task_type TEXT, skill_name TEXT, dependencies TEXT, artifact_path TEXT,
+            created_at TEXT
+        )""")
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+        migrations = {
+            "mission_id": "TEXT DEFAULT ''", "input_data": "TEXT DEFAULT '{}'",
+            "result": "TEXT DEFAULT ''", "error": "TEXT DEFAULT ''",
+        }
+        for name, declaration in migrations.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {declaration}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_mission ON tasks(mission_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
+            mission_id TEXT DEFAULT '', task_id TEXT DEFAULT '', level TEXT DEFAULT 'INFO',
+            message TEXT NOT NULL
+        )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS executions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, timestamp TEXT,
+            agent TEXT, tool_name TEXT, arguments TEXT, status TEXT, output TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS checkpoints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, step_name TEXT,
+            completed_at TEXT, artifact_path TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS processes (
+            pid INTEGER PRIMARY KEY, task_id TEXT, command TEXT, status TEXT, started_at TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS approvals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, action TEXT,
+            reason TEXT, timestamp TEXT
+        )""")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def save_mission(mission_id: str, request: str, status: str, summary: str = "") -> None:
+    now = _now()
+    with _db() as conn:
+        conn.execute("""INSERT INTO missions(mission_id,request,status,summary,created_at,updated_at)
+            VALUES(?,?,?,?,?,?) ON CONFLICT(mission_id) DO UPDATE SET
+            status=excluded.status, summary=excluded.summary, updated_at=excluded.updated_at""",
+            (mission_id, request, status, summary, now, now))
+
+
+def save_task(task: Any) -> None:
+    with _db() as conn:
+        conn.execute("""INSERT INTO tasks
+            (task_id,title,description,status,task_type,skill_name,dependencies,artifact_path,created_at,mission_id,input_data,result,error)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(task_id) DO UPDATE SET title=excluded.title, description=excluded.description,
+            status=excluded.status, task_type=excluded.task_type, skill_name=excluded.skill_name,
+            dependencies=excluded.dependencies, artifact_path=excluded.artifact_path,
+            mission_id=excluded.mission_id, input_data=excluded.input_data,
+            result=excluded.result, error=excluded.error""",
+            (task.task_id, task.title, task.description, task.status.value, task.task_type,
+             task.skill_name, json.dumps(task.dependencies, ensure_ascii=False), task.artifact_path,
+             task.created_at.isoformat(), task.mission_id,
+             json.dumps(task.input_data, ensure_ascii=False), task.result, task.error))
+
+
+def emit_event(message: str, level: str = "INFO", mission_id: str = "", task_id: str = "") -> int:
+    with _db() as conn:
+        cur = conn.execute("INSERT INTO events(timestamp,mission_id,task_id,level,message) VALUES(?,?,?,?,?)",
+                           (_now(), mission_id, task_id, level, message))
+        return int(cur.lastrowid)
+
+
+def get_events_since(event_id: int = 0, limit: int = 300):
+    with _db() as conn:
+        return conn.execute("SELECT * FROM events WHERE id>? ORDER BY id LIMIT ?", (event_id, limit)).fetchall()
+
+
+def get_latest_event_id() -> int:
+    with _db() as conn:
+        row = conn.execute("SELECT COALESCE(MAX(id),0) AS n FROM events").fetchone()
+        return int(row["n"])
+
+
+def get_all_tasks(limit: int = 200):
+    with _db() as conn:
+        return conn.execute("SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+
+
+def get_task(task_id: str):
+    with _db() as conn:
+        return conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+
+
+def get_task_history(task_id: str):
+    with _db() as conn:
+        executions = conn.execute("SELECT * FROM executions WHERE task_id=? ORDER BY timestamp DESC", (task_id,)).fetchall()
+        checkpoints = conn.execute("SELECT * FROM checkpoints WHERE task_id=? ORDER BY completed_at DESC", (task_id,)).fetchall()
+        return executions, checkpoints
+
+
+def log_execution(task_id: str, agent: str, tool_name: str, arguments: str, status: str, output: str) -> None:
+    with _db() as conn:
+        conn.execute("INSERT INTO executions(task_id,timestamp,agent,tool_name,arguments,status,output) VALUES(?,?,?,?,?,?,?)",
+                     (task_id, _now(), agent, tool_name, arguments, status, output[:4000]))
+
+
+def save_checkpoint(task_id: str, step_name: str, artifact_path: str | None = None) -> None:
+    with _db() as conn:
+        conn.execute("INSERT INTO checkpoints(task_id,step_name,completed_at,artifact_path) VALUES(?,?,?,?)",
+                     (task_id, step_name, _now(), artifact_path))
+
+
+def recover_interrupted_tasks() -> int:
+    """Mark tasks left RUNNING by a previous process; never blindly rerun side effects."""
+    with _db() as conn:
+        rows = conn.execute("SELECT task_id,mission_id FROM tasks WHERE status='RUNNING'").fetchall()
+        for row in rows:
+            conn.execute("UPDATE tasks SET status='FAILED', error=? WHERE task_id=?",
+                         ("FORGE Ä‘Ã£ dá»«ng trÆ°á»›c khi tÃ¡c vá»¥ káº¿t thÃºc. HÃ£y gá»­i láº¡i nhiá»‡m vá»¥ Ä‘á»ƒ cháº¡y láº¡i an toÃ n.", row["task_id"]))
+            conn.execute("INSERT INTO events(timestamp,mission_id,task_id,level,message) VALUES(?,?,?,?,?)",
+                         (_now(), row["mission_id"] or "", row["task_id"], "WARN", "TÃ¡c vá»¥ bá»‹ giÃ¡n Ä‘oáº¡n á»Ÿ phiÃªn FORGE trÆ°á»›c; khÃ´ng tá»± cháº¡y láº¡i Ä‘á»ƒ trÃ¡nh láº·p side-effect."))
+        return len(rows)
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\tests\test_forge_core.py
+from __future__ import annotations
+import json
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import storage.database as database
+from agents.planner import PlannerAgent
+from core.skill import BaseSkill, SkillManifest
+from core.skill_registry import SkillRegistry
+from core.scheduler import TaskScheduler
+from core.coordinator import Coordinator
+from core.task import Task, TaskStatus, ExecutionResult, ExecutionStatus
+from execution.permission_engine import PermissionEngine, SecurityViolation
+
+
+class FakePlannerClient:
+    def chat(self, messages, temperature=0.1, json_mode=False):
+        return json.dumps({"tasks": [{
+            "task_id": "t1", "title": "Create note", "task_type": "GENERAL",
+            "skill_name": "write_file", "description": "create note",
+            "input_data": {"filename": "note.txt", "content": "FORGE test"}, "dependencies": []
+        }]})
+
+
+class FailingSkill(BaseSkill):
+    def get_manifest(self):
+        return SkillManifest(name="unit_fail", description="test-only")
+
+    def execute(self, params):
+        return ExecutionResult(ExecutionStatus.FAILED, "expected failure")
+
+
+class ForgeCoreTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.db_file = self.root / "forge-test.db"
+        self.workspace = self.root / "workspace"
+        self.workspace.mkdir()
+        self.db_patch = patch.object(database, "DB_PATH", self.db_file)
+        self.storage_patch = patch.object(database, "STORAGE_DIR", self.root)
+        self.workspace_patch = patch("execution.permission_engine.WORKSPACE_DIR", self.workspace)
+        self.db_patch.start(); self.storage_patch.start(); self.workspace_patch.start()
+        database.init_db()
+        SkillRegistry.discover_skills(force=True)
+
+    def tearDown(self):
+        self.workspace_patch.stop(); self.storage_patch.stop(); self.db_patch.stop()
+        self.temp.cleanup()
+
+    def test_skill_registry_loads_expected_plugins(self):
+        names = {m["name"] for m in SkillRegistry.get_manifests()}
+        self.assertTrue({"write_file", "python_task", "run_python", "render_video", "create_3d_scene", "render_3d_scene"}.issubset(names))
+
+    def test_scene3d_contract_loads_showcase_and_rejects_duplicate_ids(self):
+        from contracts.scene3d import Scene3DSpec
+        sample = Path(__file__).resolve().parents[1] / "examples" / "floating_island.scene.json"
+        raw = json.loads(sample.read_text(encoding="utf-8"))
+        spec = Scene3DSpec.model_validate(raw)
+        self.assertEqual(spec.duration_seconds, 18)
+        self.assertGreaterEqual(len(spec.objects), 8)
+        raw["objects"].append(dict(raw["objects"][0]))
+        with self.assertRaises(Exception):
+            Scene3DSpec.model_validate(raw)
+
+        raw = json.loads(sample.read_text(encoding="utf-8"))
+        raw["project_id"] = "../outside"
+        with self.assertRaises(Exception):
+            Scene3DSpec.model_validate(raw)
+
+        raw = json.loads(sample.read_text(encoding="utf-8"))
+        raw["environment"]["fog_far"] = raw["environment"]["fog_near"]
+        with self.assertRaises(Exception):
+            Scene3DSpec.model_validate(raw)
+
+        raw = json.loads(sample.read_text(encoding="utf-8"))
+        raw["objects"][0]["position"] = [float("nan"), 0, 0]
+        with self.assertRaises(Exception):
+            Scene3DSpec.model_validate(raw)
+
+    def test_motion_studio_project_path_rejects_traversal_and_non_ascii(self):
+        import motion_studio.server as motion_server
+        with patch.object(motion_server, "WORKSPACE_DIR", self.workspace):
+            expected = (self.workspace / "projects" / "safe-project").resolve()
+            self.assertEqual(motion_server.safe_project_dir("safe-project"), expected)
+            for invalid in ("../escape", "a/b", "tÃªn-dá»±-Ã¡n"):
+                with self.subTest(project_id=invalid):
+                    with self.assertRaises(ValueError):
+                        motion_server.safe_project_dir(invalid)
+
+    def test_create_3d_scene_skill_persists_validated_scene(self):
+        from contracts.scene3d import Scene3DSpec
+        from skills.create_3d_scene.skill import Create3DSceneSkill
+        sample = Path(__file__).resolve().parents[1] / "examples" / "floating_island.scene.json"
+        raw = json.loads(sample.read_text(encoding="utf-8"))
+        raw["project_id"] = "unit-scene"
+        with patch("skills.create_3d_scene.skill.WORKSPACE_DIR", self.workspace):
+            result = Create3DSceneSkill().execute({"scene": raw})
+        self.assertEqual(result.status, ExecutionStatus.SUCCESS)
+        output = self.workspace / "projects" / "unit-scene" / "scene.json"
+        self.assertTrue(output.is_file())
+        saved = Scene3DSpec.model_validate_json(output.read_text(encoding="utf-8"))
+        self.assertEqual(saved.title, "Floating Island")
+
+    def test_database_migrates_legacy_tasks_table(self):
+        legacy_db = self.root / "legacy.sqlite"
+        conn = sqlite3.connect(legacy_db)
+        conn.execute("CREATE TABLE tasks (task_id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT, task_type TEXT, skill_name TEXT, dependencies TEXT, artifact_path TEXT, created_at TEXT)")
+        conn.execute("INSERT INTO tasks VALUES ('old1','old task','desc','FAILED','PYTHON','write_file','[]',NULL,'2026-01-01T00:00:00')")
+        conn.commit(); conn.close()
+        with patch.object(database, "DB_PATH", legacy_db):
+            database.init_db()
+            conn = sqlite3.connect(legacy_db)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+            row = conn.execute("SELECT task_id,status FROM tasks WHERE task_id='old1'").fetchone()
+            conn.close()
+        self.assertTrue({"mission_id", "input_data", "result", "error"}.issubset(columns))
+        self.assertEqual(row, ("old1", "FAILED"))
+
+    def test_write_file_does_not_overwrite_existing_files(self):
+        path = self.workspace / "existing.txt"
+        path.write_text("original", encoding="utf-8")
+        from skills.write_file.skill import WriteFileSkill
+        result = WriteFileSkill().execute({"filename": "existing.txt", "content": "replacement"})
+        self.assertEqual(result.status, ExecutionStatus.DENIED)
+        self.assertEqual(path.read_text(encoding="utf-8"), "original")
+
+    def test_permission_engine_blocks_parent_traversal(self):
+        with self.assertRaises(SecurityViolation):
+            PermissionEngine.validate_path("../outside.txt")
+
+    def test_planner_parses_and_normalizes_task_graph(self):
+        planner = PlannerAgent(client=FakePlannerClient())
+        tasks = planner.create_task_graph("Táº¡o má»™t file ghi chÃº")
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["skill_name"], "write_file")
+        self.assertEqual(tasks[0]["input_data"]["filename"], "note.txt")
+
+    def test_scheduler_executes_skill_and_persists_task(self):
+        task = Task(task_id="t1", title="Write note", skill_name="write_file",
+                    input_data={"filename": "note.txt", "content": "hello"})
+        scheduler = TaskScheduler(max_workers=1)
+        success = scheduler.run_graph([task], mission_id="m-test")
+        self.assertTrue(success)
+        self.assertEqual(task.status, TaskStatus.COMPLETED)
+        self.assertEqual((self.workspace / "note.txt").read_text(encoding="utf-8"), "hello")
+        self.assertEqual(database.get_task("t1")["status"], "COMPLETED")
+        executions, checkpoints = database.get_task_history("t1")
+        self.assertEqual(len(executions), 1)
+        self.assertEqual(executions[0]["status"], "SUCCESS")
+        self.assertEqual(len(checkpoints), 1)
+
+    def test_coordinator_namespaces_task_ids_per_mission(self):
+        class FixedPlanner:
+            def create_task_graph(self, request):
+                return [{
+                    "task_id": "t1", "title": request, "task_type": "GENERAL",
+                    "skill_name": "write_file", "description": "create",
+                    "input_data": {"filename": f"{request}.txt", "content": request},
+                    "dependencies": [],
+                }]
+        coordinator = Coordinator(planner=FixedPlanner())
+        first = coordinator._plan_tasks("missionA", "first")
+        second = coordinator._plan_tasks("missionB", "second")
+        self.assertNotEqual(first[0].task_id, second[0].task_id)
+        self.assertTrue(first[0].task_id.startswith("missionA_"))
+        self.assertTrue(second[0].task_id.startswith("missionB_"))
+
+    def test_failed_dependency_blocks_downstream(self):
+        SkillRegistry._skills["unit_fail"] = FailingSkill()
+        first = Task(task_id="a", title="Fail", skill_name="unit_fail")
+        second = Task(task_id="b", title="Depends", skill_name="write_file",
+                      input_data={"filename": "no.txt", "content": "x"}, dependencies=["a"])
+        success = TaskScheduler(max_workers=1).run_graph([first, second], mission_id="m-block")
+        self.assertFalse(success)
+        self.assertEqual(first.status, TaskStatus.FAILED)
+        self.assertEqual(second.status, TaskStatus.BLOCKED)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\config.py
+
+"""Central configuration for FORGE. All paths are anchored to this project."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent
+
+
+def _load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+
+        if value.startswith(("'", '"')) and value.endswith(("'", '"')):
+            value = value[1:-1]
+
+        os.environ.setdefault(key, value)
+
+
+_load_dotenv(ROOT_DIR / ".env")
+
+
+# ============================================================
+# FORGE DIRECTORIES
+# ============================================================
+
+WORKSPACE_DIR = Path(
+    os.getenv("FORGE_WORKSPACE_DIR", str(ROOT_DIR / "workspace"))
+).expanduser().resolve()
+
+STORAGE_DIR = Path(
+    os.getenv("FORGE_STORAGE_DIR", str(ROOT_DIR / "storage"))
+).expanduser().resolve()
+
+DB_PATH = Path(
+    os.getenv("FORGE_DB_PATH", str(STORAGE_DIR / "forge.db"))
+).expanduser().resolve()
+
+SKILLS_DIR = Path(
+    os.getenv("FORGE_SKILLS_DIR", str(ROOT_DIR / "skills"))
+).expanduser().resolve()
+
+REMOTION_TEMPLATE_DIR = Path(
+    os.getenv(
+        "FORGE_REMOTION_DIR",
+        str(ROOT_DIR / "adapters" / "remotion_template")
+    )
+).expanduser().resolve()
+
+BLENDER_EXECUTABLE = os.getenv("FORGE_BLENDER_EXECUTABLE", "")
+
+
+# ============================================================
+# OLLAMA CONNECTION
+# ============================================================
+
+OLLAMA_BASE_URL = os.getenv(
+    "OLLAMA_BASE_URL",
+    "http://localhost:11434"
+).rstrip("/")
+
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "300"))
+
+
+# ============================================================
+# FOUR-MODEL TEAM
+# ============================================================
+
+# 1. Director / Planner
+OLLAMA_MODEL = os.getenv(
+    "OLLAMA_MODEL",
+    "gemma4-e4b-local:latest"
+)
+
+# 2. Main Engineer / Coder
+OLLAMA_CODER_MODEL = os.getenv(
+    "OLLAMA_CODER_MODEL",
+    "Qwen3-Coder-30B-A3B:latest"
+)
+
+# 3. Independent Reviewer
+OLLAMA_REVIEWER_MODEL = os.getenv(
+    "OLLAMA_REVIEWER_MODEL",
+    "gpt-oss-20b-mxfp4:latest"
+)
+
+# 4. 3D Specialist
+OLLAMA_3D_MODEL = os.getenv(
+    "OLLAMA_3D_MODEL",
+    "qwen3d-coder:latest"
+)
+
+
+# ============================================================
+# FORGE EXECUTION SETTINGS
+# ============================================================
+
+FORGE_MAX_WORKERS = max(
+    1,
+    int(os.getenv("FORGE_MAX_WORKERS", "2"))
+)
+
+FORGE_MAX_ACTIVE_MISSIONS = max(
+    1,
+    int(os.getenv("FORGE_MAX_ACTIVE_MISSIONS", "1"))
+)
+
+FORGE_MAX_REPAIR_ROUNDS = max(
+    0,
+    int(os.getenv("FORGE_MAX_REPAIR_ROUNDS", "2"))
+)
+
+FORGE_ENABLE_PYTHON_EXECUTION = (
+    os.getenv("FORGE_ENABLE_PYTHON_EXECUTION", "false").lower()
+    in {"1", "true", "yes", "on"}
+)
+
+### FILE: D:\FORGE_MOTION_STUDIO_G1_FINAL\main.py
+from __future__ import annotations
+import argparse
+import json
+import shutil
+import sys
+import urllib.request
+from config import ROOT_DIR, WORKSPACE_DIR, STORAGE_DIR, REMOTION_TEMPLATE_DIR, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_CODER_MODEL
+from core.coordinator import Coordinator
+from core.skill_registry import SkillRegistry
+from storage.database import init_db
+
+
+def doctor() -> int:
+    print("FORGE SYSTEM CHECK")
+    print(f"Project root : {ROOT_DIR}")
+    print(f"Workspace    : {WORKSPACE_DIR}")
+    print(f"Database     : {STORAGE_DIR / 'forge.db'}")
+    print(f"Ollama URL   : {OLLAMA_BASE_URL}")
+    print(f"Planner model: {OLLAMA_MODEL}")
+    print(f"Coder model  : {OLLAMA_CODER_MODEL}")
+    print(f"Node         : {shutil.which('node') or 'NOT FOUND'}")
+    print(f"FFmpeg       : {shutil.which('ffmpeg') or 'NOT FOUND'}")
+    print(f"Remotion dir : {REMOTION_TEMPLATE_DIR}")
+    print(f"Remotion CLI : {(REMOTION_TEMPLATE_DIR / 'node_modules' / '@remotion' / 'cli' / 'remotion-cli.js').exists()}")
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_BASE_URL}/api/tags", timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            names = {item.get("name", "") for item in payload.get("models", [])}
+            print(f"Ollama API   : ONLINE ({response.status})")
+            print(f"Planner model: {'FOUND' if OLLAMA_MODEL in names else 'NOT FOUND'}")
+            print(f"Coder model  : {'FOUND' if OLLAMA_CODER_MODEL in names else 'NOT FOUND'}")
+    except Exception as exc:
+        print(f"Ollama API   : OFFLINE ({exc})")
+    SkillRegistry.discover_skills(force=True)
+    print("Skills       : " + (", ".join(sorted(SkillRegistry._skills)) or "NONE"))
+    for issue in SkillRegistry.get_errors():
+        print(f"Plugin error : {issue}")
+    init_db()
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    return 0 if SkillRegistry._skills else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="FORGE local multi-agent runtime")
+    parser.add_argument("--doctor", action="store_true", help="Kiá»ƒm tra mÃ´i trÆ°á»ng cÃ i Ä‘áº·t")
+    parser.add_argument("--headless", metavar="MISSION", help="Cháº¡y má»™t mission trong terminal, khÃ´ng má»Ÿ TUI")
+    parser.add_argument("--list-skills", action="store_true", help="Liá»‡t kÃª skill Ä‘Ã£ náº¡p")
+    args = parser.parse_args()
+
+    init_db()
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    SkillRegistry.discover_skills(force=True)
+    if args.doctor:
+        return doctor()
+    if args.list_skills:
+        for manifest in SkillRegistry.get_manifests():
+            print(f"- {manifest['name']} v{manifest['version']}: {manifest['description']}")
+        for issue in SkillRegistry.get_errors():
+            print(f"PLUGIN ERROR: {issue}")
+        return 0
+    if args.headless:
+        coordinator = Coordinator()
+        mission_id, tasks, success = coordinator.execute_sync(args.headless)
+        print(f"\nMission {mission_id}: {'COMPLETED' if success else 'FAILED'}")
+        for task in tasks:
+            print(f"[{task.status.value}] {task.task_id} â€” {task.title}")
+            if task.error:
+                print(f"  {task.error}")
+            if task.artifact_path:
+                print(f"  Artifact: {task.artifact_path}")
+        return 0 if success else 1
+    try:
+        from control.command_center import CommandCenter
+    except ImportError as exc:
+        print("KhÃ´ng tÃ¬m tháº¥y Textual. Cháº¡y: python -m pip install -r requirements.txt", file=sys.stderr)
+        print(f"Chi tiáº¿t: {exc}", file=sys.stderr)
+        return 2
+    CommandCenter().run()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

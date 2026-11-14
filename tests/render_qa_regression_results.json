@@ -1,0 +1,102 @@
+{
+  "blank_video": {
+    "passed": false,
+    "file": "/tmp/tmphd21hlqb/blank.mp4",
+    "file_size_bytes": 7873,
+    "checks": {
+      "dimensions": true,
+      "fps": true,
+      "duration": true,
+      "frame_count": true,
+      "visible_frame_content": false
+    },
+    "samples": [
+      {
+        "time_seconds": 0.16,
+        "passed": false,
+        "luma_min": 186.96,
+        "luma_max": 186.96,
+        "luma_stddev": 0.0,
+        "edge_density": 0.0,
+        "edge_count": 0
+      },
+      {
+        "time_seconds": 1.0,
+        "passed": false,
+        "luma_min": 186.96,
+        "luma_max": 186.96,
+        "luma_stddev": 0.0,
+        "edge_density": 0.0,
+        "edge_count": 0
+      },
+      {
+        "time_seconds": 1.8,
+        "passed": false,
+        "luma_min": 186.96,
+        "luma_max": 186.96,
+        "luma_stddev": 0.0,
+        "edge_density": 0.0,
+        "edge_count": 0
+      }
+    ],
+    "video": {
+      "codec": "mpeg4",
+      "width": 320,
+      "height": 180,
+      "fps": 30.0,
+      "duration_seconds": 2.0,
+      "frame_count": 60
+    },
+    "error": "Only 0/3 sampled frames contain measurable image structure. The render may be blank or its 3D scene may not be visible."
+  },
+  "pattern_video": {
+    "passed": true,
+    "file": "/tmp/tmphd21hlqb/pattern.mp4",
+    "file_size_bytes": 308478,
+    "checks": {
+      "dimensions": true,
+      "fps": true,
+      "duration": true,
+      "frame_count": true,
+      "visible_frame_content": true
+    },
+    "samples": [
+      {
+        "time_seconds": 0.16,
+        "passed": true,
+        "luma_min": 14.94,
+        "luma_max": 227.0,
+        "luma_stddev": 65.735,
+        "edge_density": 0.070893,
+        "edge_count": 2024
+      },
+      {
+        "time_seconds": 1.0,
+        "passed": true,
+        "luma_min": 14.74,
+        "luma_max": 226.61,
+        "luma_stddev": 66.335,
+        "edge_density": 0.072995,
+        "edge_count": 2084
+      },
+      {
+        "time_seconds": 1.8,
+        "passed": true,
+        "luma_min": 14.74,
+        "luma_max": 227.07,
+        "luma_stddev": 66.286,
+        "edge_density": 0.074256,
+        "edge_count": 2120
+      }
+    ],
+    "video": {
+      "codec": "mpeg4",
+      "width": 320,
+      "height": 180,
+      "fps": 30.0,
+      "duration_seconds": 2.0,
+      "frame_count": 60
+    },
+    "summary": "320x180@30fps, 2.00s, 60 frames; 3/3 sampled frames contain visible pixel structure."
+  }
+}

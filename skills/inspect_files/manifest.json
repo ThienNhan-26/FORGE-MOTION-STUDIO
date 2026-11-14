@@ -1,0 +1,16 @@
+{
+  "name": "inspect_files",
+  "version": "1.0.0",
+  "description": "Read-only inspection of approved source files and workspace files/directories. Never executes or modifies files.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {"type": "string", "enum": ["read", "list", "metadata"]},
+      "scope": {"type": "string", "enum": ["workspace", "source"]},
+      "path": {"type": "string"},
+      "paths": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["action", "scope"]
+  },
+  "permissions": ["workspace_read", "source_read"]
+}

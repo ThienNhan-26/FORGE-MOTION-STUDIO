@@ -1,0 +1,9 @@
+{
+  "name": "render_video",
+  "version": "1.0.0",
+  "description": "Render video motion graphic bằng Remotion. Nhận tham số là file JSON spec.",
+  "input_schema": {
+    "spec_filename": "string"
+  },
+  "permissions": ["workspace_read", "workspace_write"]
+}

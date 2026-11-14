@@ -1,0 +1,14 @@
+{
+  "name": "create_3d_scene",
+  "version": "1.1.0",
+  "description": "Generate a declarative SceneSpec v1 through the dedicated 3D Specialist, validate it with Pydantic, and save it for Motion Studio Preview/Remotion.",
+  "input_schema": {
+    "prompt": "natural-language 3D world description",
+    "project_id": "safe project id",
+    "scene": "optional complete SceneSpec v1 object"
+  },
+  "permissions": [
+    "workspace:write",
+    "ollama:3d-specialist"
+  ]
+}

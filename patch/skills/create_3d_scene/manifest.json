@@ -1,0 +1,14 @@
+{
+  "name": "create_3d_scene",
+  "version": "1.2.0",
+  "description": "Create SceneSpec v1 using Planner output or the regular Planner model; validate and save it for Motion Studio.",
+  "input_schema": {
+    "scene": "optional complete SceneSpec v1 object",
+    "prompt": "natural-language scene description when scene is not supplied",
+    "project_id": "safe project id; required with prompt"
+  },
+  "permissions": [
+    "workspace:write",
+    "ollama:planner"
+  ]
+}

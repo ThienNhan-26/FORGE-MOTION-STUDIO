@@ -1,0 +1,33 @@
+FORGE — MOTION STUDIO G1 FOUNDATION
+Build date: 2026-11-13
+Source basis: FORGE_FIXED_20261113 - Copy.zip (user-provided archive)
+Release scope: Preserve Agent Core and existing 2D Remotion composition; add a SceneSpec-driven 3D Preview/Render foundation.
+
+VERIFIED IN THE PACKAGING ENVIRONMENT
+- Python compileall: PASS
+- Unit tests: 11/11 PASS (unittest; no live Ollama call, generated-code execution, or MP4 render)
+- Skill registry: 6 built-in skills discovered, including create_3d_scene and render_3d_scene
+- SQLite migration, task ID namespacing, scheduler dependency blocking, workspace path guard and existing-file overwrite protection: PASS
+- SceneSpec v1 sample validation and duplicate/unsafe project ID rejection: PASS
+- Motion Studio API smoke: PASS (health, sample scene read, scene save, traversal rejection)
+- TypeScript/TSX syntax transpilation: PASS (compiler parser only; full typecheck/build requires npm packages)
+
+NOT VERIFIED END-TO-END HERE
+- npm registry access timed out in the packaging environment. New React Three Fiber, Three.js, Drei and @remotion/three packages could not be installed here.
+- Consequently, Vite production build, browser WebGL Preview, Remotion WebGL MP4 render and visual frame comparison were NOT run.
+- A TypeScript compiler invocation was attempted but cannot typecheck without installed React/Three/Remotion dependencies.
+- Textual TUI could not be launched because Textual is not installed in this container; requirements.txt targets Textual 8.x.
+- Ollama API was offline; Planner/Coder model calls were not exercised.
+- PowerShell scripts were reviewed but not executed on the user's Windows machine.
+
+SETUP
+- Run .\scripts\setup.ps1 on Windows with internet access. It installs Python requirements, runs npm install in adapters\remotion_template and motion_studio, and builds the Motion Studio frontend.
+- The previous Remotion package-lock.json was intentionally removed because it did not include the newly added 3D dependencies. npm install will generate a fresh lockfile for the pinned direct dependencies.
+- Start the browser studio with .\scripts\motion-studio.ps1.
+
+SAFETY / SCOPE
+- Motion Studio API binds to 127.0.0.1 only; it is not designed to be exposed to a LAN.
+- Python execution is disabled by default. Workspace path checks do not make Python execution an OS sandbox.
+- Skill plugins are imported as Python code into the FORGE process; only install trusted plugins.
+- The included storage databases are retained from the supplied archive. The actual .env and dependency/cache folders are not included.
+- Remotion is source-available under a separate license, not OSI open source. Verify current terms for company/automation/commercial use before deployment.

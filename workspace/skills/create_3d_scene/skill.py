@@ -1,0 +1,1 @@
+Modification to skills/create_3d_scene/skill.py to include 3D Specialist integration.

@@ -1,0 +1,7 @@
+{
+  "name": "render_video",
+  "version": "1.0.0",
+  "description": "Render video motion graphic nhiều cảnh bằng Remotion local template.",
+  "input_schema": {"spec": "VideoSpec object"},
+  "permissions": ["workspace_read", "workspace_write", "remotion_render"]
+}

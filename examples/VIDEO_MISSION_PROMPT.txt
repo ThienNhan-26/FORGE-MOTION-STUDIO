@@ -1,0 +1,1 @@
+Tạo một video motion graphic 2 cảnh dựa trên spec mẫu examples/video_spec_demo.json. Cảnh đầu mở đầu bằng tiêu đề, cảnh hai tạo cảm giác bụi/hạt bay. Nếu cần, hãy chuyển spec vào input_data.spec cho skill render_video.
