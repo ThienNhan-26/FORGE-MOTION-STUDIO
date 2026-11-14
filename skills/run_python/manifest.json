@@ -1,7 +1,13 @@
 {
   "name": "run_python",
-  "version": "1.0.0",
-  "description": "Chạy một file Python đã tồn tại bên trong workspace với timeout.",
-  "input_schema": {"filename": "string", "timeout": "integer optional"},
-  "permissions": ["workspace_read", "python_execute"]
+  "version": "2.0.0",
+  "description": "Chạy file Python trong workspace khi chính sách cho phép.",
+  "input_schema": {
+    "filename": "string",
+    "timeout": "integer optional"
+  },
+  "permissions": [
+    "workspace_read",
+    "python_execute"
+  ]
 }

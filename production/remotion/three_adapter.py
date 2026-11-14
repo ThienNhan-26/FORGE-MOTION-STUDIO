@@ -9,6 +9,8 @@ from pathlib import Path
 from config import REMOTION_TEMPLATE_DIR, WORKSPACE_DIR
 from contracts.scene3d import Scene3DSpec
 from core.task import ExecutionResult, ExecutionStatus
+from execution.permission_engine import PermissionEngine, SecurityViolation
+from execution.tools.filesystem import write_file
 from .render_qa import validate_render_output
 
 
@@ -38,17 +40,26 @@ class ThreeRemotionAdapter:
             )
 
         safe_task = re.sub(r"[^A-Za-z0-9_-]", "_", str(task_id))[:48] or "task"
-        project_dir = WORKSPACE_DIR / "projects" / spec.project_id
-        out_dir = project_dir / "renders"
-        runtime_dir = WORKSPACE_DIR / ".forge_runtime" / safe_task
+        props_rel = f".forge_runtime/{safe_task}/scene3d-props.json"
+        output_rel = f"projects/{spec.project_id}/renders/{safe_task}_3d.mp4"
+        qa_rel = f"projects/{spec.project_id}/renders/{safe_task}_3d.qa.json"
         try:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            runtime_dir.mkdir(parents=True, exist_ok=True)
-            props_path = runtime_dir / "scene3d-props.json"
-            output_path = out_dir / f"{safe_task}_3d.mp4"
-            props_path.write_text(json.dumps({"scene": spec.model_dump(mode="json")}, ensure_ascii=False), encoding="utf-8")
-        except OSError as exc:
-            return ExecutionResult(ExecutionStatus.FAILED, f"Không thể chuẩn bị dữ liệu render: {exc}")
+            props_path = PermissionEngine.ensure_parent(props_rel)
+            output_path = PermissionEngine.authorize_write(
+                output_rel, overwrite=PermissionEngine.is_yolo()
+            )
+            qa_path = PermissionEngine.authorize_write(
+                qa_rel, overwrite=PermissionEngine.is_yolo()
+            )
+            props_result = write_file(
+                props_rel,
+                json.dumps({"scene": spec.model_dump(mode="json")}, ensure_ascii=False),
+            )
+            if props_result.status != ExecutionStatus.SUCCESS:
+                return props_result
+        except (OSError, SecurityViolation) as exc:
+            status = ExecutionStatus.DENIED if isinstance(exc, SecurityViolation) else ExecutionStatus.FAILED
+            return ExecutionResult(status, f"Không thể chuẩn bị dữ liệu render: {exc}")
 
         command = [node, str(cli), "render", "ThreeDScene", str(output_path), f"--props={props_path}"]
         try:
@@ -73,9 +84,10 @@ class ThreeRemotionAdapter:
 
         # FORGE_G1_RENDER_QA_V1
         qa_report = validate_render_output(output_path, spec)
-        qa_path = output_path.with_suffix(".qa.json")
         try:
-            qa_path.write_text(json.dumps(qa_report, ensure_ascii=False, indent=2), encoding="utf-8")
+            qa_save = write_file(qa_rel, json.dumps(qa_report, ensure_ascii=False, indent=2))
+            if qa_save.status != ExecutionStatus.SUCCESS:
+                return ExecutionResult(qa_save.status, f"Không thể lưu Render QA report: {qa_save.output}", evidence=str(output_path))
         except OSError as exc:
             return ExecutionResult(
                 ExecutionStatus.FAILED,

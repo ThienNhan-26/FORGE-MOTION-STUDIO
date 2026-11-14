@@ -5,17 +5,18 @@ import subprocess
 from pathlib import Path
 from core.task import ExecutionResult, ExecutionStatus
 from config import REMOTION_TEMPLATE_DIR, WORKSPACE_DIR
+from execution.permission_engine import PermissionEngine, SecurityViolation
+from execution.tools.filesystem import write_file
 from production.remotion.spec_validator import SpecValidator
 
 
 class RemotionAdapter:
     @staticmethod
     def render_video_file(spec_filename: str, task_id: str) -> ExecutionResult:
-        spec_path = (WORKSPACE_DIR / spec_filename).resolve()
         try:
-            spec_path.relative_to(WORKSPACE_DIR.resolve())
-        except ValueError:
-            return ExecutionResult(ExecutionStatus.DENIED, "Spec phải nằm trong workspace.")
+            spec_path = PermissionEngine.validate_path(spec_filename)
+        except SecurityViolation as exc:
+            return ExecutionResult(ExecutionStatus.DENIED, str(exc))
         try:
             spec = SpecValidator.validate(spec_path)
             return RemotionAdapter.render_video(spec.model_dump(), task_id)
@@ -41,13 +42,18 @@ class RemotionAdapter:
             return ExecutionResult(ExecutionStatus.FAILED, "Thiếu node_modules Remotion. Chạy scripts\\setup.ps1 hoặc npm install trong adapters\\remotion_template.")
 
         safe_task = "".join(c for c in str(task_id) if c.isalnum() or c in "-_-")[:48] or "task"
-        out_dir = WORKSPACE_DIR / "projects" / spec.project_id / "renders"
-        runtime_dir = WORKSPACE_DIR / ".forge_runtime" / safe_task
-        out_dir.mkdir(parents=True, exist_ok=True)
-        runtime_dir.mkdir(parents=True, exist_ok=True)
-        props_path = runtime_dir / "props.json"
-        output_path = out_dir / f"{safe_task}_final.mp4"
-        props_path.write_text(json.dumps({"video": spec.model_dump()}, ensure_ascii=False), encoding="utf-8")
+        props_rel = f".forge_runtime/{safe_task}/props.json"
+        output_rel = f"projects/{spec.project_id}/renders/{safe_task}_final.mp4"
+        try:
+            props_path = PermissionEngine.ensure_parent(props_rel)
+            output_path = PermissionEngine.authorize_write(output_rel, overwrite=PermissionEngine.is_yolo())
+            props_result = write_file(props_rel, json.dumps({"video": spec.model_dump()}, ensure_ascii=False))
+            if props_result.status != ExecutionStatus.SUCCESS:
+                return props_result
+        except SecurityViolation as exc:
+            return ExecutionResult(ExecutionStatus.DENIED, str(exc))
+        except OSError as exc:
+            return ExecutionResult(ExecutionStatus.FAILED, f"Không thể chuẩn bị Remotion: {exc}")
 
         command = [node, str(cli), "render", "DynamicVideo", str(output_path), f"--props={props_path}"]
         try:

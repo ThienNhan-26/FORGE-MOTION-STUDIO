@@ -1,15 +1,33 @@
-.venv/
-__pycache__/
-*.py[cod]
+
+# Secrets
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
 .pytest_cache/
-storage/forge.db
-storage/forge.db-shm
-storage/forge.db-wal
-workspace/.forge_runtime/
-workspace/projects/
+
+# Node
 node_modules/
 dist/
+build/
+
+# Runtime and generated data
+storage/*.db
+storage/*.db-*
+workspace/*
+!workspace/.gitkeep
 *.mp4
-*.tmp
-.andromity/
+*.blend1
+
+# Temporary files
+*.log
+.DS_Store
+Thumbs.db

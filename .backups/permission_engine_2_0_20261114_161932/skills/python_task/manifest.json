@@ -1,0 +1,7 @@
+{
+  "name": "python_task",
+  "version": "1.0.0",
+  "description": "Sinh một chương trình Python, chạy trong workspace và tự sửa lỗi tối đa số vòng cấu hình.",
+  "input_schema": {"prompt": "string", "filename": "string"},
+  "permissions": ["workspace_write", "python_execute"]
+}

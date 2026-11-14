@@ -17,9 +17,17 @@ class InspectFilesSkill(BaseSkill):
     MAX_DIRECTORY_ENTRIES = 200
 
     SOURCE_DIRS = {
-        "agents", "core", "execution", "skills", "contracts",
-        "adapters", "production", "scripts", "storage",
-    }
+    "agents",
+    "core",
+    "execution",
+    "skills",
+    "contracts",
+    "adapters",
+    "production",
+    "scripts",
+    "storage",
+    "missions",
+}
     SOURCE_ROOT_FILES = {
         "config.py", "main.py", "readme.md", "pyproject.toml",
         "requirements.txt",
@@ -109,11 +117,11 @@ class InspectFilesSkill(BaseSkill):
             raise SecurityViolation("A source path is required.")
 
         first = raw.parts[0].lower()
-        if len(raw.parts) == 1:
-            if first not in cls.SOURCE_ROOT_FILES:
-                raise SecurityViolation("This root-level source file is not allowlisted.")
-        elif first not in cls.SOURCE_DIRS:
-            raise SecurityViolation("This source directory is not allowlisted.")
+        if first not in cls.SOURCE_DIRS:
+            if len(raw.parts) == 1 and first in cls.SOURCE_ROOT_FILES:
+                pass
+            else:
+                raise SecurityViolation("This source directory or root-level file is not allowlisted.")
 
         base = ROOT_DIR.resolve()
         if cls._has_symlink(base, raw):

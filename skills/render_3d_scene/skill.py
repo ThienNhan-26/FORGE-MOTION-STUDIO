@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from config import WORKSPACE_DIR
+from execution.permission_engine import PermissionEngine, SecurityViolation
 from contracts.scene3d import Scene3DSpec
 from core.skill import BaseSkill, SkillManifest
 from core.task import ExecutionResult, ExecutionStatus
@@ -24,11 +24,10 @@ class Render3DSceneSkill(BaseSkill):
         project_id = str(params.get("project_id", "")).strip()
         if not project_id or not all(ch.isalnum() or ch in "-_" for ch in project_id):
             return ExecutionResult(ExecutionStatus.DENIED, "project_id không hợp lệ.")
-        scene_path = (WORKSPACE_DIR / "projects" / project_id / "scene.json").resolve()
         try:
-            scene_path.relative_to(WORKSPACE_DIR.resolve())
-        except ValueError:
-            return ExecutionResult(ExecutionStatus.DENIED, "Scene nằm ngoài workspace.")
+            scene_path = PermissionEngine.validate_path(f"projects/{project_id}/scene.json")
+        except SecurityViolation as exc:
+            return ExecutionResult(ExecutionStatus.DENIED, str(exc))
         if not scene_path.is_file():
             return ExecutionResult(ExecutionStatus.FAILED, f"Không tìm thấy scene: {scene_path}")
         try:

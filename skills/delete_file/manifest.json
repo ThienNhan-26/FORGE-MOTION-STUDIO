@@ -1,0 +1,11 @@
+{
+  "name": "delete_file",
+  "version": "1.0.0",
+  "description": "Xóa một file thường trong workspace; chỉ hoạt động ở WORKSPACE_YOLO.",
+  "input_schema": {
+    "filename": "string"
+  },
+  "permissions": [
+    "workspace_delete"
+  ]
+}

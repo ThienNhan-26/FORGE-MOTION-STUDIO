@@ -131,3 +131,18 @@ FORGE_ENABLE_PYTHON_EXECUTION = (
     os.getenv("FORGE_ENABLE_PYTHON_EXECUTION", "false").lower()
     in {"1", "true", "yes", "on"}
 )
+
+# ============================================================
+# PERMISSION ENGINE 2.0
+# ============================================================
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+FORGE_PERMISSION_MODE = os.getenv("FORGE_PERMISSION_MODE", "SAFE").strip().upper()
+if FORGE_PERMISSION_MODE not in {"SAFE", "WORKSPACE_YOLO"}:
+    raise ValueError("FORGE_PERMISSION_MODE must be SAFE or WORKSPACE_YOLO")
+
+# Python path validation is not an OS sandbox. Require a separate explicit opt-in.
+FORGE_ALLOW_UNSANDBOXED_PYTHON = _env_bool("FORGE_ALLOW_UNSANDBOXED_PYTHON", False)
+FORGE_PYTHON_TIMEOUT_SECONDS = min(300, max(1, int(os.getenv("FORGE_PYTHON_TIMEOUT_SECONDS", "45"))))

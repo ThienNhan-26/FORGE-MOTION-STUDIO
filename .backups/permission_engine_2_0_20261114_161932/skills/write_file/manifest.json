@@ -1,0 +1,7 @@
+{
+  "name": "write_file",
+  "version": "1.0.0",
+  "description": "Tạo một file văn bản mới trong workspace FORGE, không ghi đè file đã tồn tại.",
+  "input_schema": {"filename": "string", "content": "string"},
+  "permissions": ["workspace_write"]
+}
