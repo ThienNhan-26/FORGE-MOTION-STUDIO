@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+markers = [
+    "model_eval: tests that require a live Ollama connection",
+]
