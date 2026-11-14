@@ -1,7 +1,7 @@
 {
   "name": "python_task",
-  "version": "2.0.0",
-  "description": "Tạo file Python, chạy qua execution gate và tự sửa lỗi có giới hạn.",
+  "version": "2.1.0",
+  "description": "Tạo file Python, chạy qua execution gate và bắt buộc qua Independent Reviewer trước khi báo thành công.",
   "input_schema": {
     "prompt": "string",
     "filename": "string"
