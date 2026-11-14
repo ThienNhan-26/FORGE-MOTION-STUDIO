@@ -188,5 +188,5 @@ class PythonTaskSkill(BaseSkill):
                     staged_path = PermissionEngine.validate_path(staging_name)
                     if staged_path.is_file():
                         staged_path.unlink()
-                except (OSError, ValueError):
+                except Exception:
                     pass
