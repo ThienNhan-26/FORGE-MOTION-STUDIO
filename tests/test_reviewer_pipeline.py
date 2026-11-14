@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import json
 import unittest
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
-from agents.reviewer import ReviewerAgent, ReviewerError, ReviewResult
+from agents.reviewer import ReviewerAgent, ReviewResult
 from core.task import ExecutionResult, ExecutionStatus, Task, TaskStatus
 from core.scheduler import TaskScheduler
 import skills.python_task.skill as skill_module
@@ -49,6 +47,19 @@ class FakeReviewer:
         return result
 
 
+def successful_write(filename, content):
+    return ExecutionResult(ExecutionStatus.SUCCESS, f"staged {filename}")
+
+
+def successful_runtime(filename):
+    return ExecutionResult(
+        ExecutionStatus.SUCCESS,
+        "verified output",
+        exit_code=0,
+        evidence=filename,
+    )
+
+
 class ReviewerPipelineTests(unittest.TestCase):
     def test_reviewer_parses_valid_pass(self):
         agent = ReviewerAgent(FakeClient(json.dumps({
@@ -65,54 +76,75 @@ class ReviewerPipelineTests(unittest.TestCase):
         self.assertEqual(result.verdict, "FAIL")
 
     def test_skill_runs_review_and_returns_pass(self):
-        old_enabled = skill_module.FORGE_ENABLE_PYTHON_EXECUTION
-        skill_module.FORGE_ENABLE_PYTHON_EXECUTION = True
-        filename = "_review_pipeline_test_pass.py"
-        target = skill_module.PermissionEngine.ensure_parent(filename)
-        if target.exists():
-            target.unlink()
-        try:
-            coder = FakeCoder(['print("verified")'])
-            reviewer = FakeReviewer([ReviewResult("PASS", "Meets request", [], "")])
-            skill = PythonTaskSkill(coder=coder, reviewer=reviewer)
-            result = skill.execute({"prompt": "Print verified", "filename": filename, "task_id": "unit-pass"})
-            self.assertEqual(result.status, ExecutionStatus.SUCCESS)
-            self.assertEqual(result.review_status, "PASS")
-            self.assertEqual(reviewer.calls, 1)
-        finally:
-            if target.exists():
-                target.unlink()
-            skill_module.FORGE_ENABLE_PYTHON_EXECUTION = old_enabled
+        coder = FakeCoder(['print("verified")'])
+        reviewer = FakeReviewer([ReviewResult("PASS", "Meets request", [], "")])
+        skill = PythonTaskSkill(coder=coder, reviewer=reviewer)
+        with patch.object(skill_module, "write_file", side_effect=successful_write), \
+             patch.object(skill_module, "run_python_script", side_effect=successful_runtime):
+            result = skill.execute({"prompt": "Print verified", "filename": "verified.py", "task_id": "unit-pass"})
+        self.assertEqual(result.status, ExecutionStatus.SUCCESS)
+        self.assertEqual(result.review_status, "PASS")
+        self.assertEqual(reviewer.calls, 1)
+        self.assertEqual(coder.calls, 1)
 
     def test_skill_corrects_once_after_review_fail(self):
-        old_enabled = skill_module.FORGE_ENABLE_PYTHON_EXECUTION
-        skill_module.FORGE_ENABLE_PYTHON_EXECUTION = True
-        filename = "_review_pipeline_test_fix.py"
-        target = skill_module.PermissionEngine.ensure_parent(filename)
-        if target.exists():
-            target.unlink()
-        try:
-            coder = FakeCoder(['print("first")', 'print("fixed")'])
-            reviewer = FakeReviewer([
-                ReviewResult("FAIL", "Output did not satisfy expected format", ["Wrong output"], "Print fixed"),
-                ReviewResult("PASS", "Corrected output", [], ""),
-            ])
-            skill = PythonTaskSkill(coder=coder, reviewer=reviewer)
-            result = skill.execute({"prompt": "Print fixed", "filename": filename, "task_id": "unit-fix"})
-            self.assertEqual(result.status, ExecutionStatus.SUCCESS)
-            self.assertEqual(result.review_status, "PASS")
-            self.assertEqual(reviewer.calls, 2)
-            self.assertEqual(coder.calls, 2)
-            self.assertIn("fixed", result.output)
-        finally:
-            if target.exists():
-                target.unlink()
-            skill_module.FORGE_ENABLE_PYTHON_EXECUTION = old_enabled
+        coder = FakeCoder(['print("first")', 'print("fixed")'])
+        reviewer = FakeReviewer([
+            ReviewResult("FAIL", "Output did not satisfy expected format", ["Wrong output"], "Print fixed"),
+            ReviewResult("PASS", "Corrected output", [], ""),
+        ])
+        skill = PythonTaskSkill(coder=coder, reviewer=reviewer)
+        with patch.object(skill_module, "write_file", side_effect=successful_write), \
+             patch.object(skill_module, "run_python_script", side_effect=successful_runtime), \
+             patch.object(skill_module, "FORGE_MAX_REVIEW_ROUNDS", 1):
+            result = skill.execute({"prompt": "Print fixed", "filename": "fixed.py", "task_id": "unit-fix"})
+        self.assertEqual(result.status, ExecutionStatus.SUCCESS)
+        self.assertEqual(result.review_status, "PASS")
+        self.assertEqual(reviewer.calls, 2)
+        self.assertEqual(coder.calls, 2)
+        self.assertIn("Reviewer PASS", result.output)
+
+    def test_reviewer_error_fails_closed(self):
+        skill = PythonTaskSkill(
+            coder=FakeCoder(['print("ran")']),
+            reviewer=FakeReviewer([RuntimeError("review endpoint unavailable")]),
+        )
+        with patch.object(skill_module, "write_file", side_effect=successful_write), \
+             patch.object(skill_module, "run_python_script", side_effect=successful_runtime):
+            result = skill.execute({"prompt": "Print ran", "filename": "ran.py", "task_id": "unit-error"})
+        self.assertEqual(result.status, ExecutionStatus.FAILED)
+        self.assertEqual(result.review_status, "ERROR")
+
+    def test_runtime_failure_never_calls_reviewer_or_returns_success(self):
+        reviewer = FakeReviewer([ReviewResult("PASS", "Must not be used", [], "")])
+        skill = PythonTaskSkill(coder=FakeCoder(['raise RuntimeError("boom")']), reviewer=reviewer)
+        failed_runtime = ExecutionResult(ExecutionStatus.FAILED, "runtime error", exit_code=1)
+        with patch.object(skill_module, "write_file", side_effect=successful_write), \
+             patch.object(skill_module, "run_python_script", return_value=failed_runtime), \
+             patch.object(skill_module, "FORGE_MAX_REPAIR_ROUNDS", 0):
+            result = skill.execute({"prompt": "Fail at runtime", "filename": "bad.py"})
+        self.assertEqual(result.status, ExecutionStatus.FAILED)
+        self.assertEqual(reviewer.calls, 0)
+
+    def test_review_failure_after_budget_never_returns_success(self):
+        reviewer = FakeReviewer([
+            ReviewResult("FAIL", "Still incorrect", ["wrong output"], "Fix it"),
+            ReviewResult("FAIL", "Still incorrect", ["wrong output"], "Fix it"),
+        ])
+        coder = FakeCoder(["print('one')", "print('two')"])
+        skill = PythonTaskSkill(coder=coder, reviewer=reviewer)
+        with patch.object(skill_module, "write_file", side_effect=successful_write), \
+             patch.object(skill_module, "run_python_script", side_effect=successful_runtime), \
+             patch.object(skill_module, "FORGE_MAX_REVIEW_ROUNDS", 1):
+            result = skill.execute({"prompt": "Do the task", "filename": "not-approved.py"})
+        self.assertEqual(result.status, ExecutionStatus.FAILED)
+        self.assertEqual(result.review_status, "FAIL")
+        self.assertEqual(reviewer.calls, 2)
 
     def test_scheduler_persists_reviewer_verdict_separately(self):
-        skill = SimpleNamespace(
-            manifest=SimpleNamespace(name="python_task"),
-            execute=lambda params: ExecutionResult(
+        skill = type("FakeSkill", (), {
+            "manifest": type("Manifest", (), {"name": "python_task"})(),
+            "execute": lambda self, params: ExecutionResult(
                 ExecutionStatus.SUCCESS,
                 "runtime PASS; reviewer PASS",
                 exit_code=0,
@@ -121,7 +153,7 @@ class ReviewerPipelineTests(unittest.TestCase):
                 review_summary="Meets requirements",
                 review_rounds=1,
             ),
-        )
+        })()
         task = Task(
             task_id="mission_t1",
             title="Test reviewer persistence",
@@ -146,26 +178,6 @@ class ReviewerPipelineTests(unittest.TestCase):
         self.assertEqual(log_calls[1][1], "Reviewer")
         self.assertEqual(log_calls[1][4], "PASS")
         self.assertTrue(any("Reviewer PASS" in event[0] for event in emitted))
-
-    def test_reviewer_error_fails_closed(self):
-        old_enabled = skill_module.FORGE_ENABLE_PYTHON_EXECUTION
-        skill_module.FORGE_ENABLE_PYTHON_EXECUTION = True
-        filename = "_review_pipeline_test_error.py"
-        target = skill_module.PermissionEngine.ensure_parent(filename)
-        if target.exists():
-            target.unlink()
-        try:
-            skill = PythonTaskSkill(
-                coder=FakeCoder(['print("ran")']),
-                reviewer=FakeReviewer([RuntimeError("review endpoint unavailable")]),
-            )
-            result = skill.execute({"prompt": "Print ran", "filename": filename, "task_id": "unit-error"})
-            self.assertEqual(result.status, ExecutionStatus.FAILED)
-            self.assertEqual(result.review_status, "ERROR")
-        finally:
-            if target.exists():
-                target.unlink()
-            skill_module.FORGE_ENABLE_PYTHON_EXECUTION = old_enabled
 
 
 if __name__ == "__main__":
