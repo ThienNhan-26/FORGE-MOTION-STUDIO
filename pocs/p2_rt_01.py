@@ -89,10 +89,15 @@ def set_file_sddl(path: str, sddl: str) -> None:
         sddl, win32security.SDDL_REVISION_1
     )
     dacl = sd.GetSecurityDescriptorDacl()
+    security_info = win32security.DACL_SECURITY_INFORMATION | 0x80000000  # PROTECTED_DACL_SECURITY_INFORMATION
+    # PyWin32 converts this argument through a signed C long. Preserve the
+    # SECURITY_INFORMATION DWORD bit pattern without overflowing C long.
+    if security_info >= 0x80000000:
+        security_info -= 0x100000000
     win32security.SetNamedSecurityInfo(
         path,
         win32security.SE_FILE_OBJECT,
-        win32security.DACL_SECURITY_INFORMATION | 0x80000000,  # PROTECTED_DACL_SECURITY_INFORMATION
+        security_info,
         None,
         None,
         dacl,
