@@ -92,7 +92,7 @@ def set_file_sddl(path: str, sddl: str) -> None:
     win32security.SetNamedSecurityInfo(
         path,
         win32security.SE_FILE_OBJECT,
-        win32security.DACL_SECURITY_INFORMATION,
+        win32security.DACL_SECURITY_INFORMATION | 0x80000000,  # PROTECTED_DACL_SECURITY_INFORMATION
         None,
         None,
         dacl,
