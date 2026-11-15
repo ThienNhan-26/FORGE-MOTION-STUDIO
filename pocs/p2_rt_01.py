@@ -88,7 +88,7 @@ def set_file_sddl(path: str, sddl: str) -> None:
     sd = win32security.ConvertStringSecurityDescriptorToSecurityDescriptor(
         sddl, win32security.SDDL_REVISION_1
     )
-    dacl = win32security.GetSecurityDescriptorDacl(sd)
+    dacl = sd.GetSecurityDescriptorDacl()
     win32security.SetNamedSecurityInfo(
         path,
         win32security.SE_FILE_OBJECT,
